@@ -26,17 +26,38 @@
             align-items: center;
             justify-content: center;
             position: relative;
+            min-height: 20vh; /* Don't let video disappear completely */
         }
         video {
             width: 100%;
             height: 100%;
             object-fit: contain;
         }
+        
+        /* Drag Handle UI */
+        #resizer {
+            height: 24px;
+            background: #1e1e1e;
+            cursor: ns-resize;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            touch-action: none; /* Prevents mobile pull-to-refresh while dragging */
+            border-top: 1px solid #333;
+            z-index: 10;
+        }
+        #resizer::after {
+            content: "";
+            width: 40px;
+            height: 4px;
+            background: #555;
+            border-radius: 2px;
+        }
+
         #ai-container {
             width: 100%;
-            height: 40vh;
+            height: 35vh; /* Default starting height */
             background: #1e1e1e;
-            border-top: 2px solid #333;
             display: flex;
             flex-direction: column;
             overflow: hidden;
@@ -45,8 +66,17 @@
             #ai-container {
                 width: 400px;
                 height: 100%;
-                border-top: none;
                 border-left: 2px solid #333;
+            }
+            #resizer {
+                width: 10px;
+                height: 100%;
+                cursor: ew-resize;
+                border-top: none;
+            }
+            #resizer::after {
+                width: 4px;
+                height: 40px;
             }
         }
         #ai-header {
@@ -85,6 +115,8 @@
         <video id="videoElement" autoplay muted playsinline></video>
     </div>
 
+    <div id="resizer"></div>
+
     <div id="ai-container">
         <div id="ai-header">
             <span class="status-dot"></span> Gemma3 Live Analysis
@@ -95,6 +127,33 @@
     </div>
 
     <script>
+        // --- UI Resizer Logic ---
+        const resizer = document.getElementById('resizer');
+        const aiContainer = document.getElementById('ai-container');
+        let isResizing = false;
+
+        resizer.addEventListener('mousedown', () => isResizing = true);
+        resizer.addEventListener('touchstart', () => isResizing = true);
+
+        window.addEventListener('mousemove', (e) => handleResize(e.clientY));
+        window.addEventListener('touchmove', (e) => handleResize(e.touches[0].clientY));
+
+        window.addEventListener('mouseup', () => isResizing = false);
+        window.addEventListener('touchend', () => isResizing = false);
+
+        function handleResize(clientY) {
+            if (!isResizing) return;
+            // Calculate new height for the bottom AI container
+            const totalHeight = window.innerHeight;
+            const newHeight = totalHeight - clientY;
+            
+            // Prevent dragging it entirely off screen (keep between 10% and 85% of screen)
+            if (newHeight > totalHeight * 0.1 && newHeight < totalHeight * 0.85) {
+                aiContainer.style.height = `${newHeight}px`;
+            }
+        }
+
+        // --- Stream Logic ---
         const wsUrl = `ws://${window.location.hostname}:8765`;
         const videoElement = document.getElementById('videoElement');
         const aiContent = document.getElementById('ai-content');
@@ -112,7 +171,6 @@
         }
 
         ws.onmessage = async function(event) {
-            // ROUTER: Split Text (AI) from Binary (Video)
             if (typeof event.data === "string") {
                 try {
                     const msg = JSON.parse(event.data);
@@ -122,13 +180,17 @@
                         if (aiContent.querySelector('.thinking')) {
                             aiContent.innerHTML = '';
                         }
-                        // Render AI Text directly to the side panel
-                        aiContent.innerHTML += msg.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                        
+                        // Sanitize input: Remove bold asterisks and escape HTML tags
+                        let safeText = msg.text.replace(/\*\*/g, '');
+                        safeText = safeText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                        
+                        aiContent.innerHTML += safeText;
                         aiContent.scrollTop = aiContent.scrollHeight;
                     }
                 } catch(e) { }
             } else if (event.data instanceof Blob && player) {
-                // Ignore blobs here; mpegts.js handles binary automatically via the URL binding
+                // Video binary handled automatically by mpegts via WebSocket URL bind
             }
         };
 

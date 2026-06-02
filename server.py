@@ -109,10 +109,16 @@ async def ai_analysis_loop():
     """
     model_name = os.environ.get("LLM_MODEL", "gemma3:4b")
     capture_path = "/dev/shm/llm_frame.jpg"
+    # The system prompt to force structured output
     ai_prompt = (
-        "You are an expert programming assistant analyzing this screen capture. "
-        "Provide a concise, well-structured layout summarizing the visual context, "
-        "and draft any required operational code or analysis in clear code blocks."
+        "You are an expert programming assistant analyzing a live screen feed. "
+        "When you identify a coding question or technical problem on the screen, "
+        "you MUST reply EXACTLY in this format:\n\n"
+        "Definition: [A brief 1-2 sentence definition of the core problem]\n"
+        "Approach: [A step-by-step logical approach to solving it]\n"
+        "Code:\n[The fully functional code block]\n\n"
+        "CRITICAL: Do NOT use markdown bolding (**) anywhere in your response. "
+        "Do not use asterisks for emphasis. Keep the response clean and perfectly structured."
     )
 
     while True:
