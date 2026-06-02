@@ -43,6 +43,7 @@ fi
 if [ -w "$VENV_DIR" ]; then
   PKGS=()
   "$PYTHON" -c "import websockets" &>/dev/null 2>&1 || PKGS+=(websockets)
+  "$PYTHON" -c "import aiohttp"    &>/dev/null 2>&1 || PKGS+=(aiohttp)
   "$PYTHON" -c "import qrcode"     &>/dev/null 2>&1 || PKGS+=(qrcode)
   "$PYTHON" -c "import zeroconf"   &>/dev/null 2>&1 || PKGS+=(zeroconf)
   if [ ${#PKGS[@]} -gt 0 ]; then
@@ -83,7 +84,15 @@ else
   echo -e "  ${GRN}✓${NC} xdotool found (cursor highlight available)"
 fi
 
-# ── 5. DISPLAY env var ───────────────────────────────────────────────────────
+# ── 5. tesseract OCR (optional but recommended for faster code reading) ──────
+if command -v tesseract &>/dev/null; then
+  echo -e "  ${GRN}✓${NC} tesseract found (fast OCR available)"
+else
+  echo -e "  ${YLW}!${NC} tesseract not found — will use vision model for OCR"
+  echo -e "       Install with:  sudo apt install tesseract-ocr"
+fi
+
+# ── 6. DISPLAY env var ───────────────────────────────────────────────────────
 if [ -z "${DISPLAY:-}" ]; then
   # Try to detect the active X display rather than blindly assuming :0
   for _d in :0 :1 :2; do
@@ -100,8 +109,8 @@ fi
 
 echo ""
 
-# ── 6. Kill any previous instance still holding the ports ────────────────────
-pkill -f "screen-share-tab/server.py\|screen-stream/server.py" 2>/dev/null || true
+# ── 7. Kill any previous instance still holding the ports ────────────────────
+pkill -f "screen-share-tab/server.py\|screen-stream/server.py\|llm-share/server.py" 2>/dev/null || true
 
 # Also kill anything still holding ports 8765/8766
 for _port in 8765 8766; do
@@ -124,5 +133,5 @@ while lsof -ti tcp:8765 &>/dev/null || lsof -ti tcp:8766 &>/dev/null; do
   _waited=$((_waited + 1))
 done
 
-# ── 7. Launch ────────────────────────────────────────────────────────────────
+# ── 8. Launch ────────────────────────────────────────────────────────────────
 exec "$PYTHON" server.py

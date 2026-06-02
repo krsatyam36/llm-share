@@ -1,24 +1,38 @@
 #!/bin/bash
 
-echo "Initializing LLM-Share Environment..."
+echo "LLM-Share — screen capture + AI code analysis"
 echo ""
 
-# 1. Fetch available models from ollama and store them in an array
-mapfile -t models < <(ollama list | awk 'NR>1 {print $1}')
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# 1. Detect monitors
+mapfile -t monitors < <(xrandr | grep " connected" | awk '{print $1}')
+if [ ${#monitors[@]} -gt 0 ]; then
+    echo "Monitors detected:"
+    for i in "${!monitors[@]}"; do
+        printf "  [%d] %s\n" "$i" "${monitors[$i]}"
+    done
+    read -p "Capture which monitor? [0]: " mon_choice
+    if [ -z "$mon_choice" ]; then mon_choice=0; fi
+    export MONITOR="$mon_choice"
+    echo "  -> Capturing: ${monitors[$mon_choice]}"
+    echo ""
+fi
+
+# 2. Fetch available models
+mapfile -t models < <(ollama list | awk 'NR>1 {print $1}')
 if [ ${#models[@]} -eq 0 ]; then
-    echo "No Ollama models found! Please run 'ollama pull <model>' first."
+    echo "No Ollama models found! Run: ollama pull gemma3:4b"
     exit 1
 fi
 
 echo "Available models:"
-# 2. Print models with serial numbers
 for i in "${!models[@]}"; do
     printf "  [%2d] %s\n" "$((i+1))" "${models[$i]}"
 done
 echo ""
 
-# Set default selection index to gemma3:4b if available, otherwise default to item 1
+# Default to gemma3:4b if available
 default_idx=1
 for i in "${!models[@]}"; do
     if [[ "${models[$i]}" == "gemma3:4b" ]]; then
@@ -27,27 +41,20 @@ for i in "${!models[@]}"; do
     fi
 done
 
-# 3. Prompt user for the serial number
-read -p "Select multimodal LLM to use [Default Number: $default_idx]: " choice
+read -p "Select LLM [Default: $default_idx]: " choice
+if [ -z "$choice" ]; then choice=$default_idx; fi
 
-# If user hits Enter, use the calculated default index
-if [ -z "$choice" ]; then
-    choice=$default_idx
-fi
-
-# 4. Validation check on user input
 if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#models[@]}" ]; then
-    echo "Invalid selection. Falling back to default."
     SELECTED_MODEL="${models[$((default_idx-1))]}"
 else
     SELECTED_MODEL="${models[$((choice-1))]}"
 fi
 
 echo ""
-echo "Booting stream and binding to model: $SELECTED_MODEL..."
+echo "Starting — model: $SELECTED_MODEL"
 echo ""
 
-# 5. Export choice and run the python service
 export LLM_MODEL="$SELECTED_MODEL"
-source llm-share/bin/activate
+source "$SCRIPT_DIR/llm-share/bin/activate"
+cd "$SCRIPT_DIR"
 python3 server.py

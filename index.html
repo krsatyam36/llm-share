@@ -10,8 +10,9 @@
         body { font-family: -apple-system, sans-serif; background: #121212; color: #e0e0e0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
         @media(min-width: 768px) { body { flex-direction: row; } }
         
-        #video-container { flex: 1; background: #000; display: flex; align-items: center; justify-content: center; min-height: 20vh; }
+        #video-container { flex: 1; background: #000; display: flex; align-items: center; justify-content: center; min-height: 20vh; position: relative; }
         video { width: 100%; height: 100%; object-fit: contain; }
+        #video-label { position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.7); color: #aaa; font-size: 11px; padding: 3px 8px; border-radius: 4px; }
         
         #resizer { height: 24px; background: #1e1e1e; cursor: ns-resize; display: flex; justify-content: center; align-items: center; touch-action: none; border-top: 1px solid #333; z-index: 10; }
         #resizer::after { content: ""; width: 40px; height: 4px; background: #555; border-radius: 2px; }
@@ -23,7 +24,8 @@
             #resizer::after { width: 4px; height: 40px; }
         }
         
-        #ai-header { padding: 12px; background: #252526; font-weight: bold; border-bottom: 1px solid #333; font-size: 14px; color: #00bcd4; display: flex; justify-content: space-between; align-items: center; }
+        #ai-header { padding: 12px; background: #252526; font-weight: bold; border-bottom: 1px solid #333; font-size: 14px; color: #00bcd4; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px; }
+        #monitor-name { font-size: 11px; color: #888; font-weight: normal; }
         
         .btn-group { display: flex; gap: 8px; }
         button { border: none; padding: 6px 14px; border-radius: 4px; font-weight: bold; font-size: 12px; text-transform: uppercase; cursor: pointer; transition: background 0.2s; }
@@ -35,15 +37,23 @@
 
         #ai-content { flex: 1; padding: 16px; overflow-y: auto; font-size: 15px; line-height: 1.6; word-wrap: break-word; white-space: pre-wrap; }
         .status-dot { display: inline-block; width: 8px; height: 8px; background: #4caf50; border-radius: 50%; margin-right: 6px; }
+        .status-dot.analyzing { animation: pulse 1.2s ease-in-out infinite; background: #ff9800; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
         .thinking { color: #888; font-style: italic; }
     </style>
 </head>
 <body>
-    <div id="video-container"><video id="videoElement" autoplay muted playsinline></video></div>
+    <div id="video-container">
+        <video id="videoElement" autoplay muted playsinline></video>
+        <div id="video-label">Loading...</div>
+    </div>
     <div id="resizer"></div>
     <div id="ai-container">
         <div id="ai-header">
-            <div><span class="status-dot"></span> Gemma3 Live</div>
+            <div>
+                <span class="status-dot"></span> Gemma3
+                <span id="monitor-name"></span>
+            </div>
             <div class="btn-group">
                 <button id="switchBtn">Switch Screen</button>
                 <button id="sendBtn">Send</button>
@@ -67,54 +77,90 @@
 
         const wsUrl = `ws://${window.location.hostname}:8765`;
         const videoElement = document.getElementById('videoElement');
+        const videoLabel = document.getElementById('video-label');
         const aiContent = document.getElementById('ai-content');
+        const monitorName = document.getElementById('monitor-name');
         const sendBtn = document.getElementById('sendBtn');
         const switchBtn = document.getElementById('switchBtn');
+        const statusDot = document.querySelector('.status-dot');
         
         let player = null;
-        let ws = new WebSocket(wsUrl);
-        
-        if (mpegts.getFeatureList().mseLivePlayback) {
-            player = mpegts.createPlayer({ type: 'mse', isLive: true, url: wsUrl });
+        let ws = null;
+
+        function startPlayer() {
+            if (player) {
+                player.destroy();
+                player = null;
+            }
+            videoLabel.textContent = 'Connecting...';
+            statusDot.style.background = '#ff9800';
+            player = mpegts.createPlayer({ type: 'mpegts', isLive: true, url: wsUrl });
             player.attachMediaElement(videoElement);
+            player.load();
+            player.play();
+            player.on(mpegts.Events.ERROR, () => {
+                videoLabel.textContent = 'Reconnecting...';
+                setTimeout(startPlayer, 2000);
+            });
+        }
+
+        function connect() {
+            ws = new WebSocket(wsUrl);
+            ws.onopen = () => { console.log('Command channel connected'); };
+            ws.onclose = () => { console.log('Command channel closed, reconnecting...'); setTimeout(connect, 2000); };
+            ws.onerror = () => { ws.close(); };
+            ws.onmessage = handleMessage;
+        }
+
+        startPlayer();
+
+        function sendCmd(cmd) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(cmd));
+            }
         }
 
         sendBtn.addEventListener('click', () => {
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: "trigger_eval" }));
-                sendBtn.disabled = true;
-                sendBtn.innerText = "Evaluating...";
-            }
+            sendCmd({ type: "trigger_eval" });
+            sendBtn.disabled = true;
+            sendBtn.innerText = "Thinking...";
         });
 
-        // Push the switch command back to the server
         switchBtn.addEventListener('click', () => {
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: "switch_screen" }));
-            }
+            sendCmd({ type: "switch_screen" });
+            switchBtn.disabled = true;
+            switchBtn.innerText = "Switching...";
+            setTimeout(() => { switchBtn.disabled = false; switchBtn.innerText = "Switch Screen"; }, 3000);
         });
 
-        ws.onmessage = async function(event) {
-            if (typeof event.data === "string") {
-                try {
-                    const msg = JSON.parse(event.data);
-                    if (msg.type === "ai_stream_start") {
-                        aiContent.innerHTML = '<p class="thinking">Analyzing screen frame...</p>';
-                    } else if (msg.type === "ai_token") {
-                        if (aiContent.querySelector('.thinking')) aiContent.innerHTML = '';
-                        let safeText = msg.text.replace(/\*\*/g, '');
-                        safeText = safeText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                        aiContent.innerHTML += safeText;
-                        aiContent.scrollTop = aiContent.scrollHeight;
-                    } else if (msg.type === "ai_stream_end") {
-                        sendBtn.disabled = false;
-                        sendBtn.innerText = "Send";
-                    }
-                } catch(e) { }
-            }
-        };
+        function handleMessage(event) {
+            if (typeof event.data !== "string") return;
+            try {
+                const msg = JSON.parse(event.data);
+                if (msg.type === "ai_stream_start") {
+                    aiContent.innerHTML = '<p class="thinking">Analyzing screen frame...</p>';
+                    statusDot.classList.add('analyzing');
+                } else if (msg.type === "ai_token") {
+                    if (aiContent.querySelector('.thinking')) aiContent.innerHTML = '';
+                    let safeText = msg.text;
+                    safeText = safeText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                    aiContent.innerHTML += safeText;
+                    aiContent.scrollTop = aiContent.scrollHeight;
+                } else if (msg.type === "ai_stream_end") {
+                    sendBtn.disabled = false;
+                    sendBtn.innerText = "Send";
+                    statusDot.classList.remove('analyzing');
+                } else if (msg.type === "screen_switched") {
+                    monitorName.textContent = `[${msg.monitor}]`;
+                    videoLabel.textContent = msg.monitor;
+                    statusDot.style.background = '#4caf50';
+                    // Reload video player for new stream
+                    setTimeout(startPlayer, 500);
+                }
+            } catch(e) { }
+        }
 
-        ws.onopen = () => { if(player) player.load(); player.play(); };
+        connect();
     </script>
 </body>
 </html>
