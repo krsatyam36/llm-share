@@ -13,16 +13,15 @@ Select an Ollama model, then stream your laptop and external monitors directly t
 
 ## Features
 
-- **LLM Integration:** Select any Ollama model at startup via `share-llm`'s indexed serial number menu (auto-detects `gemma3:4b` as default). Tap the **Send** button on your tablet to capture a screenshot and trigger on-demand analysis by the selected Ollama model — results stream directly to the client UI.
+- **LLM Integration:** Indexed serial-number menu at startup with smart `gemma3:4b` default. Tap the **Send** button on your tablet to trigger on-demand analysis — a two-stage pipeline (OCR → reasoning) extracts text from your screen and feeds it to the selected Ollama model.
+- **Dynamic Multi-Monitor Capture:** `server.py` parses `xrandr` output at startup to detect all connected displays. Tap **Switch Screen** on the tablet to cycle through laptop, external monitors, or both — ffmpeg restarts instantly with new bounds.
 - **Low Latency:** Optimized pipeline using `ffmpeg` and `mpegts.js` for sub-500ms latency.
 - **Interactive Remote Control:** Use your tablet's touch screen to move the mouse, click, scroll, and type on your laptop.
 - **Clipboard Sync:** Effortlessly share text between your tablet and laptop.
 - **Hardware Accelerated:** Automatically detects and uses **NVENC** (NVIDIA) or **VAAPI** (AMD/Intel) for ultra-efficient encoding.
-- **Multi-Monitor Support:** Stream your laptop screen, external monitor, or both side-by-side.
-- **Zero Configuration:** mDNS/Zeroconf support (`http://screen-stream.local:8766`) and terminal QR codes for instant access.
+- **Zero Configuration:** mDNS/Zeroconf support and terminal QR codes for instant access.
 - **Smart Zoom & Pan:** Pinch-to-zoom and swipe gestures optimized for mobile browsers.
-- **Cursor Highlighting:** Real-time visual feedback of your laptop's cursor position on the tablet.
-- **Split-Screen UI:** Client layout features a resizable video panel alongside an AI response panel that displays live Ollama analysis.
+- **Split-Screen UI:** Resizable video panel alongside an AI response panel with Send and Switch Screen controls.
 
 ---
 
@@ -59,19 +58,26 @@ Open the URL printed in your terminal on your tablet's browser. If `qrcode` is i
 
 ```mermaid
 graph TB
-    A[share-llm] -->|select Ollama model| B[server.py]
-    B --> C[ffmpeg x11grab]
-    C --> D[H.264 MPEG-TS]
-    D --> E[WebSocket :8765]
-    E --> F[Tablet Browser]
-    F -- Remote Input --> G[HTTP API :8766]
-    G --> H[xdotool/xclip]
-    H --> C
+    A[share-llm] -->|indexed menu → select model| B[server.py]
+    B -->|xrandr| C[detect displays]
+    C --> D[video_capture_job]
+    D -->|ffmpeg x11grab + offset| E[H.264 MPEG-TS]
+    E --> F[WebSocket :8765]
+    F --> G[Tablet Browser]
 
-    F -- Send Click --> E
-    E --> I[AI Analysis on-demand]
-    I -->|capture screenshot| J[Ollama API]
-    J -->|stream tokens| E
+    G -- Send Click --> F
+    F --> H[run_ai_analysis]
+    H -->|screenshot with active monitor bounds| I[Stage 1: OCR]
+    I -->|extracted text| J[Stage 2: Reasoning]
+    J -->|stream tokens| F
+
+    G -- Switch Screen --> F
+    F --> K[cycle ACTIVE_DISPLAY_INDEX]
+    K -->|kill ffmpeg| D
+
+    G -- Remote Input --> L[HTTP API :8766]
+    L --> M[xdotool/xclip]
+    M --> D
 ```
 
 ---
@@ -80,10 +86,10 @@ graph TB
 
 | File | Purpose |
 |---|---|
-| `share-llm` | Entry point — indexed serial number menu for Ollama model selection with smart `gemma3:4b` default, exports `LLM_MODEL`, activates venv, and launches `server.py` |
+| `share-llm` | Entry point — fetches Ollama models, displays indexed serial-number menu with smart default detection, validates input, activates venv, and launches `server.py` |
 | `start.sh` | Standalone dependency checker and launcher (used by systemd service & .deb package) |
-| `server.py` | Async HTTP + WebSocket server — handles video streaming, remote input, and event-driven AI screenshot analysis |
-| `index.html` | Client-side split-screen web UI with mpegts.js player, touch controls, Send button for AI trigger, and live AI response panel |
+| `server.py` | Async HTTP + WebSocket server — parses `xrandr` for dynamic multi-monitor bounds, streams H.264 video, handles remote input, and runs event-driven two-stage AI analysis (OCR → reasoning) on the active monitor |
+| `index.html` | Client-side split-screen web UI with mpegts.js player, resizable panels, Send button for AI trigger, and Switch Screen button to cycle monitors |
 | `install-service.sh` | Install the server as a systemd user service for persistent background operation |
 | `packaging/` | Debian packaging scripts (`build-deb.sh` + DEBIAN control files) |
 
@@ -113,17 +119,12 @@ sudo dpkg -i screen-share-tab_1.0.0_amd64.deb
 
 ---
 
-## Browser Shortcuts
+## Client Controls
 
-| Key | Action |
+| Control | Action |
 |:---:|---|
-| `1` / `2` | Switch to Laptop / External monitor |
-| `B` | View both monitors side-by-side |
-| `F` | Toggle Fullscreen |
-| `←` / `→` | Swipe/Switch between screens |
-| `↑` / `↓` | Adjust FPS |
-| `L` / `M` / `H` | Quality: Low (600k), Medium (1.5M), High (3M) |
-| `C` | Toggle Cursor Highlight |
+| **Send** | Capture the active monitor and run the two-stage AI analysis (OCR → reasoning) |
+| **Switch Screen** | Cycle to the next connected display — ffmpeg restarts with the new monitor bounds |
 
 ---
 
