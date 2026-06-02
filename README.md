@@ -13,7 +13,7 @@ Select an Ollama model, then stream your laptop and external monitors directly t
 
 ## Features
 
-- **LLM Integration:** Select any Ollama model at startup via `share-llm`. Tap the **Send** button on your tablet to capture a screenshot and trigger on-demand analysis by the selected Ollama model — results stream directly to the client UI.
+- **LLM Integration:** Select any Ollama model at startup via `share-llm`'s indexed serial number menu (auto-detects `gemma3:4b` as default). Tap the **Send** button on your tablet to capture a screenshot and trigger on-demand analysis by the selected Ollama model — results stream directly to the client UI.
 - **Low Latency:** Optimized pipeline using `ffmpeg` and `mpegts.js` for sub-500ms latency.
 - **Interactive Remote Control:** Use your tablet's touch screen to move the mouse, click, scroll, and type on your laptop.
 - **Clipboard Sync:** Effortlessly share text between your tablet and laptop.
@@ -80,7 +80,7 @@ graph TB
 
 | File | Purpose |
 |---|---|
-| `share-llm` | Entry point — prompts for an Ollama model, exports `LLM_MODEL`, then launches `server.py` directly |
+| `share-llm` | Entry point — indexed serial number menu for Ollama model selection with smart `gemma3:4b` default, exports `LLM_MODEL`, activates venv, and launches `server.py` |
 | `start.sh` | Standalone dependency checker and launcher (used by systemd service & .deb package) |
 | `server.py` | Async HTTP + WebSocket server — handles video streaming, remote input, and event-driven AI screenshot analysis |
 | `index.html` | Client-side split-screen web UI with mpegts.js player, touch controls, Send button for AI trigger, and live AI response panel |
