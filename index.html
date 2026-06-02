@@ -7,51 +7,33 @@
     <script src="mpegts.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background: #121212;
-            color: #e0e0e0;
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-            overflow: hidden;
-        }
+        body { font-family: -apple-system, sans-serif; background: #121212; color: #e0e0e0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
         @media(min-width: 768px) { body { flex-direction: row; } }
         
-        #video-container {
-            flex: 1; background: #000; display: flex; align-items: center; justify-content: center; min-height: 20vh;
-        }
+        #video-container { flex: 1; background: #000; display: flex; align-items: center; justify-content: center; min-height: 20vh; }
         video { width: 100%; height: 100%; object-fit: contain; }
         
-        #resizer {
-            height: 24px; background: #1e1e1e; cursor: ns-resize; display: flex; justify-content: center; align-items: center; touch-action: none; border-top: 1px solid #333; z-index: 10;
-        }
+        #resizer { height: 24px; background: #1e1e1e; cursor: ns-resize; display: flex; justify-content: center; align-items: center; touch-action: none; border-top: 1px solid #333; z-index: 10; }
         #resizer::after { content: ""; width: 40px; height: 4px; background: #555; border-radius: 2px; }
 
-        #ai-container {
-            width: 100%; height: 35vh; background: #1e1e1e; display: flex; flex-direction: column; overflow: hidden;
-        }
+        #ai-container { width: 100%; height: 35vh; background: #1e1e1e; display: flex; flex-direction: column; overflow: hidden; }
         @media(min-width: 768px) {
             #ai-container { width: 400px; height: 100%; border-left: 2px solid #333; }
             #resizer { width: 10px; height: 100%; cursor: ew-resize; border-top: none; }
             #resizer::after { width: 4px; height: 40px; }
         }
         
-        #ai-header {
-            padding: 12px; background: #252526; font-weight: bold; border-bottom: 1px solid #333; font-size: 14px; color: #00bcd4;
-            display: flex; justify-content: space-between; align-items: center;
-        }
+        #ai-header { padding: 12px; background: #252526; font-weight: bold; border-bottom: 1px solid #333; font-size: 14px; color: #00bcd4; display: flex; justify-content: space-between; align-items: center; }
         
-        /* The New Send Button */
-        #sendBtn {
-            background: #00bcd4; color: #000; border: none; padding: 6px 14px; border-radius: 4px; font-weight: bold; font-size: 12px; text-transform: uppercase; cursor: pointer; transition: background 0.2s;
-        }
+        .btn-group { display: flex; gap: 8px; }
+        button { border: none; padding: 6px 14px; border-radius: 4px; font-weight: bold; font-size: 12px; text-transform: uppercase; cursor: pointer; transition: background 0.2s; }
+        #switchBtn { background: #444; color: #fff; }
+        #switchBtn:active { background: #666; }
+        #sendBtn { background: #00bcd4; color: #000; }
         #sendBtn:active { background: #008ba3; }
         #sendBtn:disabled { background: #444; color: #888; cursor: not-allowed; }
 
-        #ai-content {
-            flex: 1; padding: 16px; overflow-y: auto; font-size: 15px; line-height: 1.6; word-wrap: break-word; white-space: pre-wrap;
-        }
+        #ai-content { flex: 1; padding: 16px; overflow-y: auto; font-size: 15px; line-height: 1.6; word-wrap: break-word; white-space: pre-wrap; }
         .status-dot { display: inline-block; width: 8px; height: 8px; background: #4caf50; border-radius: 50%; margin-right: 6px; }
         .thinking { color: #888; font-style: italic; }
     </style>
@@ -61,8 +43,11 @@
     <div id="resizer"></div>
     <div id="ai-container">
         <div id="ai-header">
-            <div><span class="status-dot"></span> Gemma3 Live Analysis</div>
-            <button id="sendBtn">Send</button>
+            <div><span class="status-dot"></span> Gemma3 Live</div>
+            <div class="btn-group">
+                <button id="switchBtn">Switch Screen</button>
+                <button id="sendBtn">Send</button>
+            </div>
         </div>
         <div id="ai-content">
             <p class="thinking">Awaiting evaluation trigger...</p>
@@ -84,6 +69,7 @@
         const videoElement = document.getElementById('videoElement');
         const aiContent = document.getElementById('ai-content');
         const sendBtn = document.getElementById('sendBtn');
+        const switchBtn = document.getElementById('switchBtn');
         
         let player = null;
         let ws = new WebSocket(wsUrl);
@@ -93,12 +79,18 @@
             player.attachMediaElement(videoElement);
         }
 
-        // Handle the Send Button Click
         sendBtn.addEventListener('click', () => {
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: "trigger_eval" }));
                 sendBtn.disabled = true;
                 sendBtn.innerText = "Evaluating...";
+            }
+        });
+
+        // Push the switch command back to the server
+        switchBtn.addEventListener('click', () => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "switch_screen" }));
             }
         });
 
@@ -115,7 +107,6 @@
                         aiContent.innerHTML += safeText;
                         aiContent.scrollTop = aiContent.scrollHeight;
                     } else if (msg.type === "ai_stream_end") {
-                        // Re-enable button when Gemma3 finishes
                         sendBtn.disabled = false;
                         sendBtn.innerText = "Send";
                     }

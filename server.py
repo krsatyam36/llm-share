@@ -3,6 +3,7 @@ import os
 import json
 import base64
 import socket
+import subprocess
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import threading
 import aiohttp
@@ -12,7 +13,8 @@ from websockets.server import serve
 HTTP_PORT = 8766
 WS_PORT = 8765
 CONNECTED_CLIENTS = set()
-IS_ANALYZING = False  # Global lock to prevent overlapping AI triggers
+IS_ANALYZING = False
+VIDEO_PROCESS = None
 
 print("\nScreen Stream — starting up...")
 
@@ -25,7 +27,48 @@ def probe_encoders():
     return has_nvenc, has_vaapi
 
 HAS_NVENC, HAS_VAAPI = probe_encoders()
-print("  ✓ ffmpeg found\n  ✓ Python packages ready\n  ✓ mpegts.js ready\n  ✓ xdotool found (cursor highlight available)\n  ✓ DISPLAY=" + os.environ.get("DISPLAY", ":0.0"))
+
+# --- XRANDR DYNAMIC RESOLUTION PARSER ---
+def detect_displays():
+    displays = []
+    try:
+        output = subprocess.check_output("xrandr", shell=True, text=True)
+        for line in output.split('\n'):
+            if " connected" in line:
+                parts = line.split()
+                name = parts[0]
+                for p in parts[1:]:
+                    if 'x' in p and '+' in p: # Matches formats like 1920x1080+1920+0
+                        res, offsets = p.split('+', 1)
+                        w, h = res.split('x')
+                        ox, oy = offsets.split('+')
+                        displays.append({
+                            "name": name,
+                            "w": w, "h": h,
+                            "x": ox, "y": oy
+                        })
+                        break
+    except Exception:
+        pass
+    # Fallback if xrandr fails
+    if not displays:
+        displays.append({"name": "Default", "w": "1920", "h": "1080", "x": "0", "y": "0"})
+    return displays
+
+DISPLAYS = detect_displays()
+ACTIVE_DISPLAY_INDEX = 0
+
+# If multiple monitors exist, default to the external one (usually HDMI/DP, not 'eDP')
+if len(DISPLAYS) > 1:
+    for i, d in enumerate(DISPLAYS):
+        if not d['name'].lower().startswith('e'):
+            ACTIVE_DISPLAY_INDEX = i
+            break
+
+print("  ✓ ffmpeg found")
+print(f"  ✓ Display Engine mapping {len(DISPLAYS)} monitors (Active: {DISPLAYS[ACTIVE_DISPLAY_INDEX]['name']})")
+print("  ✓ Python packages ready")
+print("  ✓ mpegts.js ready")
 
 def get_local_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -48,10 +91,9 @@ def run_http_server():
     server.serve_forever()
 
 threading.Thread(target=run_http_server, daemon=True).start()
-print(f"16:32:01 [INFO] HTTP → port {HTTP_PORT}")
 
 async def video_capture_job():
-    """ Runs continuously to broadcast the screen to the mobile device """
+    global VIDEO_PROCESS
     if HAS_NVENC:
         encoder = ["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ull"]
     elif HAS_VAAPI:
@@ -59,37 +101,43 @@ async def video_capture_job():
     else:
         encoder = ["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency"]
 
-    ffmpeg_cmd = [
-        "ffmpeg", "-loglevel", "quiet", "-y",
-        "-f", "x11grab", "-video_size", "1920x1080", "-framerate", "30",
-        "-i", os.environ.get("DISPLAY", ":0.0"),
-        *encoder,
-        "-b:v", "3000k", "-g", "30", "-f", "mpegts", "-"
-    ]
-
     while True:
         if CONNECTED_CLIENTS:
-            process = await asyncio.create_subprocess_exec(
+            # Dynamically fetch the current active monitor's bounds
+            active_disp = DISPLAYS[ACTIVE_DISPLAY_INDEX]
+            display_env = os.environ.get("DISPLAY", ":0.0")
+            input_offset = f"{display_env}+{active_disp['x']},{active_disp['y']}"
+            
+            ffmpeg_cmd = [
+                "ffmpeg", "-loglevel", "quiet", "-y",
+                "-f", "x11grab", "-video_size", f"{active_disp['w']}x{active_disp['h']}", "-framerate", "30",
+                "-i", input_offset,
+                *encoder,
+                "-b:v", "3000k", "-g", "30", "-f", "mpegts", "-"
+            ]
+
+            VIDEO_PROCESS = await asyncio.create_subprocess_exec(
                 *ffmpeg_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
             )
             try:
                 while CONNECTED_CLIENTS:
-                    chunk = await process.stdout.read(4096)
+                    chunk = await VIDEO_PROCESS.stdout.read(4096)
                     if not chunk:
                         break
                     await asyncio.gather(*[ws.send(chunk) for ws in CONNECTED_CLIENTS], return_exceptions=True)
             except Exception:
                 pass
             finally:
-                try:
-                    process.kill()
-                    await process.wait()
-                except Exception:
-                    pass
+                if VIDEO_PROCESS:
+                    try:
+                        VIDEO_PROCESS.kill()
+                        await VIDEO_PROCESS.wait()
+                    except Exception:
+                        pass
+                    VIDEO_PROCESS = None
         await asyncio.sleep(0.5)
 
 async def run_ai_analysis():
-    """ Triggered ONLY when the user clicks 'Send' on the UI """
     global IS_ANALYZING
     if IS_ANALYZING:
         return
@@ -98,25 +146,23 @@ async def run_ai_analysis():
     model_name = os.environ.get("LLM_MODEL", "gemma3:4b")
     capture_path = "/dev/shm/llm_frame.jpg"
     
-    # Anti-Hallucination Prompt: Force it to read first or abort.
-    ai_prompt = (
-        "You are an expert programming assistant analyzing a live screen feed. "
-        "FIRST, carefully read the text on the screen. If the screen is mostly empty or the text is too small/unclear to read, you MUST reply with 'Definition: No legible coding question found.' and stop immediately.\n\n"
-        "If you CAN read a clear technical question, reply EXACTLY in this format:\n\n"
-        "Definition: [Quote or summarize the exact problem you see on screen]\n"
-        "Approach: [A step-by-step logical approach to solving it]\n"
-        "Code:\n[The fully functional code block]\n\n"
-        "CRITICAL: Do NOT guess or invent a problem. Do NOT use markdown bolding (**)."
-    )
-
     try:
         start_msg = json.dumps({"type": "ai_stream_start"})
         await asyncio.gather(*[ws.send(start_msg) for ws in CONNECTED_CLIENTS], return_exceptions=True)
+        
+        status_msg = json.dumps({"type": "ai_token", "text": "👀 *Stage 1: Scanning screen for text...*\n\n"})
+        await asyncio.gather(*[ws.send(status_msg) for ws in CONNECTED_CLIENTS], return_exceptions=True)
+
+        # Map the snapshot capture to the exactly selected display bounds
+        active_disp = DISPLAYS[ACTIVE_DISPLAY_INDEX]
+        display_env = os.environ.get("DISPLAY", ":0.0")
+        input_offset = f"{display_env}+{active_disp['x']},{active_disp['y']}"
 
         ffmpeg_cmd = [
-            "ffmpeg", "-y", "-f", "x11grab", "-video_size", "1920x1080",
-            "-i", os.environ.get("DISPLAY", ":0.0"),
-            "-vframes", "1", "-q:v", "2", capture_path
+            "ffmpeg", "-loglevel", "error", "-y", 
+            "-f", "x11grab", "-video_size", f"{active_disp['w']}x{active_disp['h']}",
+            "-i", input_offset,
+            "-frames:v", "1", "-update", "1", "-q:v", "2", capture_path
         ]
         
         proc = await asyncio.create_subprocess_exec(*ffmpeg_cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
@@ -126,46 +172,73 @@ async def run_ai_analysis():
             with open(capture_path, "rb") as f:
                 b64_image = base64.b64encode(f.read()).decode('utf-8')
         except FileNotFoundError:
-            print("[AI Error] Failed to capture screen frame.")
             return
 
-        payload = {
-            "model": model_name,
-            "prompt": ai_prompt,
-            "images": [b64_image],
-            "stream": True,
-            "options": {
-                "num_ctx": 8192,
-                "num_predict": 4096  # Safer than -1 for certain models like Qwen
-            }
-        }
-
-        # Completely disable HTTP timeouts so the model can take its time
         timeout = aiohttp.ClientTimeout(total=None, sock_read=None, sock_connect=None)
 
+        ocr_prompt = (
+            "You are a strict OCR (Optical Character Recognition) engine. "
+            "Your ONLY job is to read the text visible in this image. "
+            "Do NOT solve any problems. Do NOT write any code unless it is literally visible in the image. "
+            "Output ONLY the exact text you see."
+        )
+        
+        ocr_payload = {
+            "model": model_name,
+            "prompt": ocr_prompt,
+            "images": [b64_image],
+            "stream": False,
+            "options": {"num_ctx": 8192}
+        }
+
+        ocr_text = ""
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post("http://localhost:11434/api/generate", json=payload) as resp:
-                # Handle API-level crashes (like out-of-memory errors from Ollama)
-                if resp.status != 200:
-                    err_text = await resp.text()
-                    print(f"[AI API Error] Status {resp.status}: {err_text}")
-                    err_msg = json.dumps({"type": "ai_token", "text": f"\n\n[API Error: Status {resp.status}]"})
-                    await asyncio.gather(*[ws.send(err_msg) for ws in CONNECTED_CLIENTS], return_exceptions=True)
-                    
+            async with session.post("http://localhost:11434/api/generate", json=ocr_payload) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    ocr_text = data.get("response", "").strip()
+
+        if not ocr_text or len(ocr_text) < 3:
+            err_msg = json.dumps({"type": "ai_token", "text": "Definition: No legible text found on screen to analyze."})
+            await asyncio.gather(*[ws.send(err_msg) for ws in CONNECTED_CLIENTS], return_exceptions=True)
+            return
+
+        clean_preview = ocr_text.replace('\n', ' ')[:60]
+        status_msg2 = json.dumps({"type": "ai_token", "text": f"✅ *Extracted:* `{clean_preview}...`\n\n🧠 *Stage 2: Reasoning...*\n\n---\n\n"})
+        await asyncio.gather(*[ws.send(status_msg2) for ws in CONNECTED_CLIENTS], return_exceptions=True)
+
+        reason_prompt = (
+            f"Here is the exact text extracted from the user's screen:\n\n"
+            f"\"\"\"{ocr_text}\"\"\"\n\n"
+            "Based ONLY on this text, identify the technical problem. "
+            "Reply EXACTLY in this format:\n\n"
+            "Definition: [1-2 sentence summary of the problem]\n"
+            "Approach: [Step-by-step logic]\n"
+            "Code:\n[Functional code block]\n\n"
+            "CRITICAL: Do not invent requirements outside of the extracted text. Do not use markdown bolding (**)."
+        )
+
+        reason_payload = {
+            "model": model_name,
+            "prompt": reason_prompt,
+            "stream": True,
+            "options": {"num_ctx": 8192, "num_predict": 4096}
+        }
+
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post("http://localhost:11434/api/generate", json=reason_payload) as resp:
                 async for line in resp.content:
                     if line:
                         data = json.loads(line.decode('utf-8'))
                         token = data.get("response", "")
                         token_msg = json.dumps({"type": "ai_token", "text": token})
                         await asyncio.gather(*[ws.send(token_msg) for ws in CONNECTED_CLIENTS], return_exceptions=True)
+
     except Exception as e:
-        # Catch and broadcast hardware/connection failures directly to mobile UI
-        print(f"[AI System Error] {e}")
         err_msg = json.dumps({"type": "ai_token", "text": f"\n\n[System Error: {str(e)}]"})
         await asyncio.gather(*[ws.send(err_msg) for ws in CONNECTED_CLIENTS], return_exceptions=True)
     finally:
         IS_ANALYZING = False
-        # Alert the UI that generation is finished so the button can be re-enabled
         end_msg = json.dumps({"type": "ai_stream_end"})
         await asyncio.gather(*[ws.send(end_msg) for ws in CONNECTED_CLIENTS], return_exceptions=True)
 
@@ -173,12 +246,29 @@ async def handler(websocket):
     CONNECTED_CLIENTS.add(websocket)
     try:
         async for message in websocket:
-            # Route text messages (Commands from the mobile UI)
             if isinstance(message, str):
                 try:
                     data = json.loads(message)
                     if data.get("type") == "trigger_eval":
                         asyncio.create_task(run_ai_analysis())
+                    
+                    # --- NEW SWITCH SCREEN LOGIC ---
+                    elif data.get("type") == "switch_screen":
+                        global ACTIVE_DISPLAY_INDEX, VIDEO_PROCESS
+                        ACTIVE_DISPLAY_INDEX = (ACTIVE_DISPLAY_INDEX + 1) % len(DISPLAYS)
+                        active_disp = DISPLAYS[ACTIVE_DISPLAY_INDEX]
+                        
+                        # Notify the UI immediately
+                        msg = json.dumps({"type": "ai_token", "text": f"\n\n📺 *Switched capture to {active_disp['name']} ({active_disp['w']}x{active_disp['h']})*\n\n"})
+                        for ws in CONNECTED_CLIENTS:
+                            await ws.send(msg)
+                            
+                        # Kill current ffmpeg; the video loop will instantly restart it with the new screen parameters
+                        if VIDEO_PROCESS:
+                            try:
+                                VIDEO_PROCESS.kill()
+                            except:
+                                pass
                 except json.JSONDecodeError:
                     pass
     except Exception:
@@ -195,11 +285,15 @@ async def main():
     print("──────────────────────────────────────────────────────\n")
     
     async with serve(handler, "0.0.0.0", WS_PORT):
-        # Only the video loops continuously now. AI waits for client trigger.
         await asyncio.gather(video_capture_job())
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nStopping Screen Stream...")
+        print("\n[Shutting Down] Tearing down listeners and clearing sockets...")
+    except OSError as e:
+        if e.errno == 98:
+            print("\n[Port Conflict] Ports are busy. Cleaning sockets automatically...")
+            os.system("fuser -k 8765/tcp 8766/tcp 2>/dev/null")
+            print("[Resolved] Try executing ./share-llm again.")
