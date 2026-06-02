@@ -98,16 +98,15 @@ async def run_ai_analysis():
     model_name = os.environ.get("LLM_MODEL", "gemma3:4b")
     capture_path = "/dev/shm/llm_frame.jpg"
     
-    # Strict formatting prompt as requested
+    # Anti-Hallucination Prompt: Force it to read first or abort.
     ai_prompt = (
         "You are an expert programming assistant analyzing a live screen feed. "
-        "When you identify a coding question or technical problem on the screen, "
-        "you MUST reply EXACTLY in this format:\n\n"
-        "Definition: [A brief 1-2 sentence definition of the core problem]\n"
+        "FIRST, carefully read the text on the screen. If the screen is mostly empty or the text is too small/unclear to read, you MUST reply with 'Definition: No legible coding question found.' and stop immediately.\n\n"
+        "If you CAN read a clear technical question, reply EXACTLY in this format:\n\n"
+        "Definition: [Quote or summarize the exact problem you see on screen]\n"
         "Approach: [A step-by-step logical approach to solving it]\n"
         "Code:\n[The fully functional code block]\n\n"
-        "CRITICAL: Do NOT use markdown bolding (**) anywhere in your response. "
-        "Do not use asterisks for emphasis. Keep the response clean and perfectly structured."
+        "CRITICAL: Do NOT guess or invent a problem. Do NOT use markdown bolding (**)."
     )
 
     try:
@@ -127,20 +126,43 @@ async def run_ai_analysis():
             with open(capture_path, "rb") as f:
                 b64_image = base64.b64encode(f.read()).decode('utf-8')
         except FileNotFoundError:
+            print("[AI Error] Failed to capture screen frame.")
             return
 
-        payload = {"model": model_name, "prompt": ai_prompt, "images": [b64_image], "stream": True}
+        payload = {
+            "model": model_name,
+            "prompt": ai_prompt,
+            "images": [b64_image],
+            "stream": True,
+            "options": {
+                "num_ctx": 8192,
+                "num_predict": 4096  # Safer than -1 for certain models like Qwen
+            }
+        }
 
-        async with aiohttp.ClientSession() as session:
+        # Completely disable HTTP timeouts so the model can take its time
+        timeout = aiohttp.ClientTimeout(total=None, sock_read=None, sock_connect=None)
+
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post("http://localhost:11434/api/generate", json=payload) as resp:
+                # Handle API-level crashes (like out-of-memory errors from Ollama)
+                if resp.status != 200:
+                    err_text = await resp.text()
+                    print(f"[AI API Error] Status {resp.status}: {err_text}")
+                    err_msg = json.dumps({"type": "ai_token", "text": f"\n\n[API Error: Status {resp.status}]"})
+                    await asyncio.gather(*[ws.send(err_msg) for ws in CONNECTED_CLIENTS], return_exceptions=True)
+                    
                 async for line in resp.content:
                     if line:
                         data = json.loads(line.decode('utf-8'))
                         token = data.get("response", "")
                         token_msg = json.dumps({"type": "ai_token", "text": token})
                         await asyncio.gather(*[ws.send(token_msg) for ws in CONNECTED_CLIENTS], return_exceptions=True)
-    except Exception:
-        pass
+    except Exception as e:
+        # Catch and broadcast hardware/connection failures directly to mobile UI
+        print(f"[AI System Error] {e}")
+        err_msg = json.dumps({"type": "ai_token", "text": f"\n\n[System Error: {str(e)}]"})
+        await asyncio.gather(*[ws.send(err_msg) for ws in CONNECTED_CLIENTS], return_exceptions=True)
     finally:
         IS_ANALYZING = False
         # Alert the UI that generation is finished so the button can be re-enabled
