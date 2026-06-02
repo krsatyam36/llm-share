@@ -1,0 +1,1561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>Screen Stream</title>
+  <script src="mpegts.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      font-family: system-ui, -apple-system, sans-serif;
+      overflow: hidden;
+      touch-action: manipulation;
+      user-select: none;
+    }
+
+    /* ── Top bar ─────────────────────────────────────────────────────── */
+    #topbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 12px;
+      background: #141414;
+      border-bottom: 1px solid #242424;
+      height: 52px;
+      flex-shrink: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+    }
+    #topbar::-webkit-scrollbar { display: none; }
+
+    .logo {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .5px;
+      color: #444;
+      margin-right: 4px;
+      text-transform: uppercase;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .sep { width: 1px; height: 22px; background: #2a2a2a; flex-shrink: 0; margin: 0 4px; }
+
+    .tb-btn {
+      padding: 0 14px;
+      height: 34px;
+      border: 1px solid #303030;
+      border-radius: 7px;
+      background: transparent;
+      color: #777;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background .1s, color .1s, border-color .1s;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .tb-btn:active { opacity: .65; }
+    .tb-btn.active {
+      background: #1d4ed8;
+      border-color: #1d4ed8;
+      color: #fff;
+    }
+    .tb-btn.active-green {
+      background: rgba(22,163,74,.2);
+      border-color: rgba(22,163,74,.5);
+      color: #4ade80;
+    }
+    .tb-btn.sm { padding: 0 10px; font-size: 12px; }
+
+    /* RTT pill */
+    #rtt-pill {
+      margin-left: auto;
+      font-size: 11px;
+      font-weight: 600;
+      color: #4ade80;
+      background: rgba(74,222,128,.08);
+      border: 1px solid rgba(74,222,128,.2);
+      border-radius: 20px;
+      padding: 4px 10px;
+      white-space: nowrap;
+      letter-spacing: .3px;
+      flex-shrink: 0;
+      transition: color .3s, background .3s;
+    }
+    #rtt-pill.warn { color: #fbbf24; background: rgba(251,191,36,.08); border-color: rgba(251,191,36,.2); }
+    #rtt-pill.bad  { color: #f87171; background: rgba(248,113,113,.08); border-color: rgba(248,113,113,.2); }
+    #rtt-pill.idle { color: #444;    background: transparent; border-color: #252525; }
+
+    /* keyboard shortcut hint */
+    kbd {
+      font-size: 9px;
+      padding: 1px 4px;
+      border: 1px solid #333;
+      border-radius: 3px;
+      color: #555;
+      font-family: inherit;
+      margin-left: 4px;
+    }
+
+    /* ── Stream area ─────────────────────────────────────────────────── */
+    #streams {
+      display: flex;
+      width: 100vw;
+      height: calc(100dvh - 52px);
+      background: #111;
+      position: relative;
+    }
+
+    .stream-wrap {
+      position: relative;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0d0d0d;
+      overflow: hidden;
+      min-width: 0;
+    }
+    .stream-wrap.hidden { display: none; }
+
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+      display: block;
+      /* transform-origin set inline for pinch-zoom */
+    }
+
+    /* ── Divider (Both mode) ─────────────────────────────────────────── */
+    #divider {
+      display: none;
+      width: 5px;
+      background: #1a1a1a;
+      cursor: col-resize;
+      flex-shrink: 0;
+      transition: background .15s;
+      touch-action: none;
+      position: relative;
+      z-index: 10;
+    }
+    #divider:hover, #divider.dragging { background: #1d4ed8; }
+    #divider::after {
+      content: '';
+      position: absolute;
+      inset: 0 -6px;  /* wider hit area */
+    }
+
+    /* Portrait divider becomes horizontal */
+    @media (orientation: portrait) {
+      #divider { width: auto; height: 5px; cursor: row-resize; }
+      #divider::after { inset: -6px 0; }
+    }
+
+    /* ── Status badge (top-right) ────────────────────────────────────── */
+    .badge {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+      pointer-events: none;
+    }
+    .badge.idle         { background: rgba(55,65,81,.8);  color: #9ca3af; }
+    .badge.connecting   { background: rgba(180,120,0,.8); color: #fde68a; }
+    .badge.streaming    { background: rgba(5,120,55,.8);  color: #a7f3d0; }
+    .badge.stalled      { background: rgba(180,50,0,.8);  color: #fca5a5; }
+    .badge.reconnecting { background: rgba(140,30,0,.8);  color: #fca5a5; }
+    .badge.tap-to-play  { background: rgba(30,64,175,.8); color: #bfdbfe; }
+
+    /* ── Stats bar (bottom overlay) ──────────────────────────────────── */
+    .stats-bar {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      background: linear-gradient(to top, rgba(0,0,0,.6) 0%, transparent 100%);
+      pointer-events: none;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .3px;
+    }
+    .s-label { color: #3a3a3a; text-transform: uppercase; font-size: 10px; letter-spacing: .5px; }
+    .s-sep   { color: #252525; }
+    .s-val   { color: #555; transition: color .3s; }
+    .s-val.live { color: #888; }
+    .s-dropped.has-drops { color: #f87171; }
+
+    /* ── Fullscreen button (top-left) ────────────────────────────────── */
+    .fs-btn {
+      position: absolute;
+      top: 10px; left: 10px;
+      width: 32px; height: 32px;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 6px;
+      background: rgba(0,0,0,.4);
+      backdrop-filter: blur(4px);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity .2s;
+      z-index: 5;
+    }
+    .stream-wrap:hover .fs-btn { opacity: 1; }
+    .fs-btn svg { width: 15px; height: 15px; fill: none; stroke: #bbb; stroke-width: 2; stroke-linecap: round; }
+
+    /* ── Cursor highlight canvas ─────────────────────────────────────── */
+    .cursor-canvas {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 4;
+    }
+
+    /* ── Tap-to-play overlay ─────────────────────────────────────────── */
+    .tap-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 6;
+    }
+    .tap-overlay.visible { display: flex; }
+    .tap-btn {
+      background: rgba(255,255,255,.08);
+      border: 2px solid rgba(255,255,255,.2);
+      border-radius: 50%;
+      width: 72px; height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(6px);
+    }
+    .tap-btn svg { width: 32px; height: 32px; fill: #fff; margin-left: 4px; }
+
+    /* ── Focus mode badge ───────────────────────────────────────────── */
+    .focus-badge {
+      position: absolute;
+      top: 10px; left: 50%; transform: translateX(-50%);
+      padding: 5px 14px;
+      border-radius: 20px;
+      font-size: 11px; font-weight: 700; letter-spacing: .6px;
+      text-transform: uppercase;
+      background: rgba(99,102,241,.85);
+      color: #e0e7ff;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .2s;
+      white-space: nowrap;
+      z-index: 8;
+    }
+    .focus-badge.visible { opacity: 1; }
+
+    /* ── No-MSE error screen ─────────────────────────────────────────── */
+    #mse-error {
+      display: none;
+      position: fixed; inset: 0;
+      background: #0a0a0a;
+      align-items: center; justify-content: center;
+      text-align: center; padding: 32px;
+      flex-direction: column; gap: 16px;
+    }
+    #mse-error h2 { color: #f87171; font-size: 20px; }
+    #mse-error p  { color: #888; font-size: 15px; line-height: 1.5; }
+
+    /* ── Portrait ────────────────────────────────────────────────────── */
+    @media (orientation: portrait) {
+      #streams { flex-direction: column; }
+    }
+
+    /* ── Control-mode UI ─────────────────────────────────────────────── */
+    .stream-wrap.control video { cursor: crosshair; }
+    .stream-wrap.control { box-shadow: inset 0 0 0 2px rgba(245,158,11,.6); }
+
+    /* Tap ripple — instant visual feedback */
+    .ripple {
+      position: absolute;
+      width: 36px; height: 36px;
+      margin-left: -18px; margin-top: -18px;
+      border: 2px solid rgba(251,191,36,.95);
+      border-radius: 50%;
+      pointer-events: none;
+      animation: ripple .45s ease-out forwards;
+      z-index: 7;
+    }
+    .ripple.right { border-color: rgba(248,113,113,.95); }
+    @keyframes ripple {
+      0%   { transform: scale(.3); opacity: 1; }
+      100% { transform: scale(1.6); opacity: 0; }
+    }
+
+    /* Modifier key strip + soft-keyboard frame */
+    #kb-bar {
+      display: none;
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      background: #161616;
+      border-top: 1px solid #2a2a2a;
+      padding: 8px 10px;
+      gap: 6px;
+      z-index: 50;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    #kb-bar.visible { display: flex; }
+    .kb-btn {
+      padding: 0 12px;
+      height: 36px;
+      min-width: 44px;
+      border: 1px solid #303030;
+      border-radius: 7px;
+      background: #1c1c1c;
+      color: #aaa;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .kb-btn:active { background: #252525; }
+    .kb-btn.armed {
+      background: rgba(245,158,11,.2);
+      border-color: rgba(245,158,11,.6);
+      color: #fbbf24;
+    }
+    #kb-input {
+      position: absolute;
+      width: 1px; height: 1px;
+      opacity: 0;
+      pointer-events: none;
+      left: -100px;
+    }
+
+    /* Modal (Send Text + Clipboard view) */
+    #modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.7);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    #modal.visible { display: flex; }
+    .modal-box {
+      background: #161616;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      padding: 16px;
+      width: 100%;
+      max-width: 520px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .modal-box h3 { color: #ddd; font-size: 14px; font-weight: 600; }
+    .modal-box textarea {
+      width: 100%;
+      min-height: 120px;
+      background: #0d0d0d;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      color: #ddd;
+      padding: 10px;
+      font-family: ui-monospace, monospace;
+      font-size: 13px;
+      resize: vertical;
+    }
+    .modal-row { display: flex; gap: 8px; justify-content: flex-end; }
+    .tb-btn.danger { color: #f87171; border-color: rgba(248,113,113,.4); }
+
+    /* ── Toast notification ──────────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: 24px; left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 10px;
+      padding: 10px 20px;
+      font-size: 13px;
+      color: #ccc;
+      z-index: 100;
+      transition: transform .3s cubic-bezier(.34,1.56,.64,1), opacity .3s;
+      opacity: 0;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+  </style>
+</head>
+<body>
+
+<div id="topbar">
+  <span class="logo">ScreenStream</span>
+
+  <!-- View buttons -->
+  <button class="tb-btn" data-view="laptop"   onclick="setView('laptop')">Laptop <kbd>1</kbd></button>
+  <button class="tb-btn" data-view="external" onclick="setView('external')">External <kbd>2</kbd></button>
+  <button class="tb-btn" data-view="both"     onclick="setView('both')">Both <kbd>B</kbd></button>
+
+  <div class="sep"></div>
+
+  <!-- Quality presets -->
+  <button class="tb-btn sm" data-q="low"  onclick="setQuality('low')">Low</button>
+  <button class="tb-btn sm active" data-q="med"  onclick="setQuality('med')">Med</button>
+  <button class="tb-btn sm" data-q="high" onclick="setQuality('high')">High</button>
+
+  <div class="sep"></div>
+
+  <!-- FPS selector -->
+  <button class="tb-btn sm" data-fps="10" onclick="setFps(10)">10fps</button>
+  <button class="tb-btn sm" data-fps="15" onclick="setFps(15)">15fps</button>
+  <button class="tb-btn sm" data-fps="24" onclick="setFps(24)">24fps</button>
+  <button class="tb-btn sm active" data-fps="30" onclick="setFps(30)">30fps</button>
+
+  <div class="sep"></div>
+
+  <!-- Cursor highlight toggle -->
+  <button class="tb-btn sm" id="cursor-btn" onclick="toggleCursor()" title="Cursor highlight">⊕ Cursor</button>
+
+  <div class="sep"></div>
+
+  <!-- Remote control toggle -->
+  <button class="tb-btn sm" id="control-btn" onclick="toggleControl()" title="Remote control mode">🎮 Control</button>
+  <button class="tb-btn sm" id="kb-btn" onclick="toggleKeyboard()" title="Show keyboard">⌨ KB</button>
+  <button class="tb-btn sm" id="clip-btn" onclick="openClipboard()" title="Clipboard">📋 Clip</button>
+
+  <!-- RTT -->
+  <span id="rtt-pill" class="idle">RTT —</span>
+</div>
+
+<!-- Hidden input that receives the OS keyboard -->
+<input id="kb-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+
+<!-- Modifier + special-key strip -->
+<div id="kb-bar">
+  <button class="kb-btn" data-mod="ctrl">Ctrl</button>
+  <button class="kb-btn" data-mod="alt">Alt</button>
+  <button class="kb-btn" data-mod="shift">Shift</button>
+  <button class="kb-btn" data-mod="super">Super</button>
+  <button class="kb-btn" data-key="Tab">Tab</button>
+  <button class="kb-btn" data-key="Escape">Esc</button>
+  <button class="kb-btn" data-key="Up">↑</button>
+  <button class="kb-btn" data-key="Down">↓</button>
+  <button class="kb-btn" data-key="Left">←</button>
+  <button class="kb-btn" data-key="Right">→</button>
+  <button class="kb-btn" data-key="Return">⏎</button>
+  <button class="kb-btn" data-key="BackSpace">⌫</button>
+  <button class="kb-btn" id="kb-focus-btn">📝 Type</button>
+  <button class="kb-btn" onclick="toggleKeyboard()">✕</button>
+</div>
+
+<!-- Modal (Clipboard / Send Text) -->
+<div id="modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal-box">
+    <h3 id="modal-title">Send text to laptop</h3>
+    <textarea id="modal-text" placeholder="Paste or type text — it will be typed at the laptop's cursor."></textarea>
+    <div class="modal-row">
+      <button class="tb-btn sm" onclick="closeModal()">Cancel</button>
+      <button class="tb-btn sm" id="modal-secondary" onclick="modalSecondary()" style="display:none">Get from laptop</button>
+      <button class="tb-btn sm active" id="modal-primary" onclick="modalPrimary()">Send</button>
+    </div>
+  </div>
+</div>
+
+<div id="streams">
+
+  <div class="stream-wrap" id="wrap-laptop">
+    <video id="vid-laptop" muted playsinline></video>
+    <canvas class="cursor-canvas" id="canvas-laptop"></canvas>
+    <div class="tap-overlay" id="tap-laptop">
+      <div class="tap-btn"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+    </div>
+    <button class="fs-btn" onclick="toggleFullscreen('laptop')">
+      <svg viewBox="0 0 24 24" id="fs-icon-laptop">
+        <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+        <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+      </svg>
+    </button>
+    <span class="badge idle" id="badge-laptop">idle</span>
+    <span class="focus-badge" id="focus-badge-laptop">⊙ Focus</span>
+    <div class="stats-bar">
+      <span class="s-label">Laptop · eDP</span>
+      <span class="s-sep">·</span><span class="s-val" id="spd-laptop">—</span>
+      <span class="s-sep">·</span><span class="s-val" id="fps-laptop">— fps</span>
+      <span class="s-sep">·</span><span class="s-val s-dropped" id="drp-laptop">0 dropped</span>
+    </div>
+  </div>
+
+  <div id="divider"></div>
+
+  <div class="stream-wrap" id="wrap-external">
+    <video id="vid-external" muted playsinline></video>
+    <canvas class="cursor-canvas" id="canvas-external"></canvas>
+    <div class="tap-overlay" id="tap-external">
+      <div class="tap-btn"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+    </div>
+    <button class="fs-btn" onclick="toggleFullscreen('external')">
+      <svg viewBox="0 0 24 24" id="fs-icon-external">
+        <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+        <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+      </svg>
+    </button>
+    <span class="badge idle" id="badge-external">idle</span>
+    <span class="focus-badge" id="focus-badge-external">⊙ Focus</span>
+    <div class="stats-bar">
+      <span class="s-label">External · HDMI</span>
+      <span class="s-sep">·</span><span class="s-val" id="spd-external">—</span>
+      <span class="s-sep">·</span><span class="s-val" id="fps-external">— fps</span>
+      <span class="s-sep">·</span><span class="s-val s-dropped" id="drp-external">0 dropped</span>
+    </div>
+  </div>
+
+</div>
+
+<div id="toast"></div>
+
+<div id="mse-error">
+  <h2>Browser not supported</h2>
+  <p>This app requires MSE (Media Source Extensions).<br>Please use Chrome or Firefox.</p>
+</div>
+
+<script>
+'use strict';
+
+// ─── Source resolution map (must match server.py SCREENS) ─────────────────
+const SOURCE = {
+  laptop:   { w: 1920, h: 1080 },
+  external: { w: 1920, h: 1080 },
+};
+
+// ─── Quality presets ───────────────────────────────────────────────────────
+const QUALITY = {
+  low:  { bitrate: '600k'  },
+  med:  { bitrate: '1500k' },
+  high: { bitrate: '3000k' },
+};
+let currentQuality = 'med';
+let currentFps     = 30;
+
+function setQuality(q) {
+  if (!QUALITY[q]) return;
+  currentQuality = q;
+  document.querySelectorAll('[data-q]').forEach(b =>
+    b.classList.toggle('active', b.dataset.q === q)
+  );
+  // Reconnect all active streams with new params
+  Object.values(streams).forEach(s => {
+    if (s.active) { s.delay = 300; s._scheduleReconnect(); }
+  });
+  toast(`Quality: ${q.toUpperCase()}`);
+  try { localStorage.setItem('ss-quality', q); } catch(_) {}
+}
+
+function setFps(fps) {
+  currentFps = fps;
+  document.querySelectorAll('[data-fps]').forEach(b =>
+    b.classList.toggle('active', parseInt(b.dataset.fps) === fps)
+  );
+  Object.values(streams).forEach(s => {
+    if (s.active) { s.delay = 300; s._scheduleReconnect(); }
+  });
+  toast(`FPS: ${fps}`);
+  try { localStorage.setItem('ss-fps', fps); } catch(_) {}
+}
+
+// ─── Remote control state ─────────────────────────────────────────────────
+let controlMode  = false;
+let _controlCap  = false;
+let _clipboardCap = false;
+const stickyMods = new Set();   // 'ctrl' | 'alt' | 'shift' | 'super'
+
+// Fire-and-forget input dispatcher
+function send(type, payload = {}) {
+  fetch(`http://${location.hostname}:8766/input`, {
+    method: 'POST',
+    body:   JSON.stringify({ type, ...payload }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
+function toggleControl() {
+  if (!_controlCap) { toast('xdotool not installed on the laptop'); return; }
+  controlMode = !controlMode;
+  const btn = document.getElementById('control-btn');
+  btn.classList.toggle('active', controlMode);
+  for (const id of ['laptop', 'external']) {
+    document.getElementById(`wrap-${id}`).classList.toggle('control', controlMode);
+  }
+  if (controlMode) {
+    // Reset any pinch-zoom transform so coords stay accurate
+    for (const s of Object.values(streams)) {
+      s._scale = 1;
+      s.video.style.transform = '';
+      s.video.style.transformOrigin = '';
+    }
+    toast('Control mode ON — tap to click, hold for right-click');
+  } else {
+    toast('Control mode OFF');
+  }
+}
+
+// ─── Keyboard ─────────────────────────────────────────────────────────────
+function _xdotoolKeysym(jsKey) {
+  // Map JS KeyboardEvent.key → xdotool keysym for non-printable keys
+  const map = {
+    'Enter': 'Return', 'Backspace': 'BackSpace', 'Tab': 'Tab',
+    'Escape': 'Escape', 'Delete': 'Delete', 'Home': 'Home', 'End': 'End',
+    'PageUp': 'Page_Up', 'PageDown': 'Page_Down',
+    'ArrowUp': 'Up', 'ArrowDown': 'Down',
+    'ArrowLeft': 'Left', 'ArrowRight': 'Right',
+    ' ': 'space',
+  };
+  if (map[jsKey]) return map[jsKey];
+  if (/^F([1-9]|1[0-2])$/.test(jsKey)) return jsKey;
+  return null;
+}
+
+function _flushModsAnd(keysym) {
+  const mods = [...stickyMods];
+  const combined = mods.length ? `${mods.join('+')}+${keysym}` : keysym;
+  send('key', { keys: combined });
+  stickyMods.clear();
+  document.querySelectorAll('.kb-btn[data-mod]').forEach(b => b.classList.remove('armed'));
+}
+
+function toggleKeyboard() {
+  const bar = document.getElementById('kb-bar');
+  const on  = !bar.classList.contains('visible');
+  bar.classList.toggle('visible', on);
+  if (on) {
+    document.getElementById('kb-input').focus();
+  } else {
+    document.getElementById('kb-input').blur();
+    stickyMods.clear();
+    document.querySelectorAll('.kb-btn[data-mod]').forEach(b => b.classList.remove('armed'));
+  }
+  document.getElementById('kb-btn').classList.toggle('active', on);
+}
+
+function _initKeyboard() {
+  // Modifier toggles
+  document.querySelectorAll('.kb-btn[data-mod]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const m = btn.dataset.mod;
+      if (stickyMods.has(m)) { stickyMods.delete(m); btn.classList.remove('armed'); }
+      else                   { stickyMods.add(m);   btn.classList.add('armed');    }
+    });
+  });
+  // Special key buttons
+  document.querySelectorAll('.kb-btn[data-key]').forEach(btn => {
+    btn.addEventListener('click', () => _flushModsAnd(btn.dataset.key));
+  });
+  // "Type" → focus the hidden input (re-pop OS keyboard)
+  document.getElementById('kb-focus-btn').addEventListener('click', () => {
+    document.getElementById('kb-input').focus();
+  });
+
+  // Captured keystrokes from the hidden input
+  const inp = document.getElementById('kb-input');
+  inp.addEventListener('keydown', (e) => {
+    e.preventDefault();
+    const k    = e.key;
+    const sym  = _xdotoolKeysym(k);
+    const mods = [];
+    if (e.ctrlKey  || stickyMods.has('ctrl'))  mods.push('ctrl');
+    if (e.altKey   || stickyMods.has('alt'))   mods.push('alt');
+    if (e.shiftKey || stickyMods.has('shift')) mods.push('shift');
+    if (e.metaKey  || stickyMods.has('super')) mods.push('super');
+
+    if (sym) {
+      const combined = mods.length ? `${mods.join('+')}+${sym}` : sym;
+      send('key', { keys: combined });
+    } else if (k.length === 1) {
+      if (mods.length) {
+        send('key', { keys: `${mods.join('+')}+${k.toLowerCase()}` });
+      } else {
+        send('type', { text: k });
+      }
+    }
+    // Sticky mods are consumed by any actual keypress
+    stickyMods.clear();
+    document.querySelectorAll('.kb-btn[data-mod]').forEach(b => b.classList.remove('armed'));
+  });
+  // Strip everything the input accumulates
+  inp.addEventListener('input', () => { inp.value = ''; });
+}
+
+// ─── Clipboard / Send Text modal ──────────────────────────────────────────
+let _modalMode = 'send';   // 'send' | 'clip'
+
+function openClipboard() {
+  if (!_clipboardCap) { toast('xclip not installed on laptop — install with: sudo apt install xclip'); return; }
+  _modalMode = 'clip';
+  document.getElementById('modal-title').textContent = 'Clipboard';
+  document.getElementById('modal-text').value = '';
+  document.getElementById('modal-text').placeholder = 'Tap "Get from laptop" to fetch, or paste text and "Send to laptop".';
+  document.getElementById('modal-secondary').style.display = '';
+  document.getElementById('modal-secondary').textContent = 'Get from laptop';
+  document.getElementById('modal-primary').textContent = 'Send to laptop';
+  document.getElementById('modal').classList.add('visible');
+}
+
+function openSendText() {
+  _modalMode = 'send';
+  document.getElementById('modal-title').textContent = 'Send text to laptop';
+  document.getElementById('modal-text').value = '';
+  document.getElementById('modal-text').placeholder = 'Text typed here will be entered at the laptop cursor.';
+  document.getElementById('modal-secondary').style.display = 'none';
+  document.getElementById('modal-primary').textContent = 'Type on laptop';
+  document.getElementById('modal').classList.add('visible');
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.remove('visible');
+}
+
+async function modalPrimary() {
+  const text = document.getElementById('modal-text').value;
+  if (!text) return;
+  if (_modalMode === 'clip') {
+    await fetch(`http://${location.hostname}:8766/clipboard`, {
+      method: 'POST', body: JSON.stringify({ text }),
+    }).catch(() => {});
+    toast('Sent to laptop clipboard');
+  } else {
+    send('type', { text });
+    toast('Typing on laptop…');
+  }
+  closeModal();
+}
+
+async function modalSecondary() {
+  // Only "Get from laptop" uses this
+  try {
+    const r = await fetch(`http://${location.hostname}:8766/clipboard`);
+    const { text } = await r.json();
+    document.getElementById('modal-text').value = text || '';
+    if (navigator.clipboard && text) {
+      try { await navigator.clipboard.writeText(text); toast('Copied to tablet clipboard'); }
+      catch(_) { toast('Pulled from laptop'); }
+    } else {
+      toast('Pulled from laptop');
+    }
+  } catch (_) {
+    toast('Failed to read laptop clipboard');
+  }
+}
+
+// ─── Toast ─────────────────────────────────────────────────────────────────
+let _toastTimer = null;
+function toast(msg, dur = 1800) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), dur);
+}
+
+// ─── ScreenStream class ────────────────────────────────────────────────────
+class ScreenStream {
+  constructor(id) {
+    this.id           = id;
+    this.video        = document.getElementById(`vid-${id}`);
+    this.wrap         = document.getElementById(`wrap-${id}`);
+    this.badge        = document.getElementById(`badge-${id}`);
+    this.focusBadge   = document.getElementById(`focus-badge-${id}`);
+    this.tapOvl       = document.getElementById(`tap-${id}`);
+    this.player       = null;
+    this.active       = false;
+    this.delay        = 1500;
+    this.timer        = null;
+    this._prevDecoded = 0;
+    this._stalledTimer = null;
+    this._lastTime    = -1;
+    this._tapTime     = 0;    // for double-tap
+    this._tapX        = 0;
+    this._tapY        = 0;
+    this._pinch       = null; // for pinch-zoom
+    this._scale       = 1;
+    this._notified    = false;
+    this._crop        = null; // focus mode crop region
+
+    // Tap-to-play
+    this.tapOvl.addEventListener('click', () => {
+      this.tapOvl.classList.remove('visible');
+      this.video.play().catch(() => {});
+    });
+
+    // Remote-control gestures (only act when controlMode === true)
+    this._setupControl();
+
+    // Double-tap → toggle focus mode on the tapped region (only when control mode is OFF;
+    // when ON, the pointer-based handler manages double-tap detection itself)
+    this.video.addEventListener('click', (e) => {
+      if (controlMode) return;
+      const now = Date.now();
+      if (now - this._tapTime < 300) {
+        if (this._crop) {
+          this._exitFocus();
+        } else {
+          const src = this._displayToSource(this._tapX, this._tapY);
+          if (src) this._enterFocus(src.x, src.y);
+        }
+        this._tapTime = 0;
+      } else {
+        this._tapTime = now;
+        this._tapX    = e.clientX;
+        this._tapY    = e.clientY;
+      }
+    });
+
+    // Pinch-to-zoom
+    this._setupPinch();
+  }
+
+  // Map a display coordinate to source video pixel coords (letterbox-aware)
+  _displayToSource(clientX, clientY) {
+    const rect = this.video.getBoundingClientRect();
+    const src  = SOURCE[this.id];
+    const vr   = src.w / src.h;
+    const wr   = rect.width / rect.height;
+    let vw, vh, ox, oy;
+    if (vr > wr) {
+      vw = rect.width;  vh = rect.width / vr;
+      ox = 0;           oy = (rect.height - vh) / 2;
+    } else {
+      vh = rect.height; vw = rect.height * vr;
+      oy = 0;           ox = (rect.width - vw) / 2;
+    }
+    const rx = clientX - rect.left;
+    const ry = clientY - rect.top;
+    if (rx < ox || rx > ox + vw || ry < oy || ry > oy + vh) return null;
+    let sx = ((rx - ox) / vw) * src.w;
+    let sy = ((ry - oy) / vh) * src.h;
+    // If focus mode is active, the displayed pixels represent the crop region
+    if (this._crop) {
+      sx = this._crop.x + (sx / src.w) * this._crop.w;
+      sy = this._crop.y + (sy / src.h) * this._crop.h;
+    }
+    return { x: Math.round(sx), y: Math.round(sy) };
+  }
+
+  _enterFocus(sx, sy) {
+    const src = SOURCE[this.id];
+    const cw  = Math.round(src.w / 2);
+    const ch  = Math.round(src.h / 2);
+    const cx  = Math.max(0, Math.min(src.w - cw, sx - cw / 2));
+    const cy  = Math.max(0, Math.min(src.h - ch, sy - ch / 2));
+    this._crop = { x: Math.round(cx), y: Math.round(cy), w: cw, h: ch };
+    this.focusBadge.classList.add('visible');
+    this.delay = 300;
+    this._scheduleReconnect();
+    toast('Focus mode — double-tap to exit');
+  }
+
+  _exitFocus() {
+    this._crop = null;
+    this.focusBadge.classList.remove('visible');
+    // reset pinch-zoom so the re-encoded full frame fills cleanly
+    this._scale                  = 1;
+    this.video.style.transform   = '';
+    this.video.style.transformOrigin = '';
+    this.delay = 300;
+    this._scheduleReconnect();
+    toast('Focus off');
+  }
+
+  // ── Remote-control input handling ──────────────────────────────────
+  _setupControl() {
+    const el = this.video;
+
+    let pointers       = new Map();   // active pointers
+    let downAt         = null;        // first pointer down position+time
+    let dragging       = false;
+    let longPressTimer = null;
+    let lastMoveSent   = 0;
+    let lastScrollY    = null;
+    const DRAG_THRESH  = 8;
+    const LONG_MS      = 480;
+    const MOVE_HZ      = 33;          // throttle drag-moves to ~30/s
+
+    const ripple = (clientX, clientY, right = false) => {
+      const rect = this.wrap.getBoundingClientRect();
+      const r = document.createElement('div');
+      r.className = 'ripple' + (right ? ' right' : '');
+      r.style.left = (clientX - rect.left) + 'px';
+      r.style.top  = (clientY - rect.top)  + 'px';
+      this.wrap.appendChild(r);
+      setTimeout(() => r.remove(), 460);
+    };
+
+    const cancelLong = () => {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    };
+
+    el.addEventListener('pointerdown', (e) => {
+      if (!controlMode) return;
+      // Don't capture for non-touch/mouse (e.g. pen → fine)
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      // Two-finger / multi-touch → scroll mode
+      if (pointers.size === 2 && e.pointerType === 'touch') {
+        cancelLong();
+        dragging = false;
+        const arr = [...pointers.values()];
+        lastScrollY = (arr[0].y + arr[1].y) / 2;
+        return;
+      }
+
+      // First contact → arm tap / long-press / drag
+      if (pointers.size === 1) {
+        downAt   = { x: e.clientX, y: e.clientY, t: Date.now(), pid: e.pointerId };
+        dragging = false;
+        try { el.setPointerCapture(e.pointerId); } catch (_) {}
+        // Long-press → right-click
+        longPressTimer = setTimeout(() => {
+          longPressTimer = null;
+          const src = this._displayToSource(downAt.x, downAt.y);
+          if (src) {
+            send('click', { screen: this.id, x: src.x, y: src.y, button: 3 });
+            ripple(downAt.x, downAt.y, true);
+          }
+          downAt = null;   // consumed
+        }, LONG_MS);
+      }
+    });
+
+    el.addEventListener('pointermove', (e) => {
+      if (!controlMode) return;
+      if (!pointers.has(e.pointerId)) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      // Two-finger scroll
+      if (pointers.size >= 2 && e.pointerType === 'touch') {
+        const arr = [...pointers.values()];
+        const midY = (arr[0].y + arr[1].y) / 2;
+        if (lastScrollY !== null) {
+          const dy = midY - lastScrollY;
+          if (Math.abs(dy) > 12) {
+            // dy > 0 (fingers moved down) → content moves down → scroll up
+            const src = this._displayToSource(arr[0].x, arr[0].y) ||
+                        this._displayToSource(arr[1].x, arr[1].y);
+            if (src) send('scroll', { screen: this.id, x: src.x, y: src.y,
+                                      dy: dy > 0 ? -1 : 1 });
+            lastScrollY = midY;
+          }
+        }
+        return;
+      }
+
+      if (!downAt || e.pointerId !== downAt.pid) return;
+      const dx = e.clientX - downAt.x;
+      const dy = e.clientY - downAt.y;
+
+      if (!dragging && (dx*dx + dy*dy) > DRAG_THRESH * DRAG_THRESH) {
+        cancelLong();
+        dragging = true;
+        const src = this._displayToSource(downAt.x, downAt.y);
+        if (src) send('down', { screen: this.id, x: src.x, y: src.y, button: 1 });
+      }
+
+      if (dragging) {
+        const now = Date.now();
+        if (now - lastMoveSent > 1000 / MOVE_HZ) {
+          lastMoveSent = now;
+          const src = this._displayToSource(e.clientX, e.clientY);
+          if (src) send('move', { screen: this.id, x: src.x, y: src.y });
+        }
+      }
+    });
+
+    const finish = (e) => {
+      if (!controlMode) { pointers.delete(e.pointerId); return; }
+      pointers.delete(e.pointerId);
+
+      if (pointers.size < 2) lastScrollY = null;
+
+      if (!downAt || e.pointerId !== downAt.pid) return;
+      cancelLong();
+
+      if (dragging) {
+        const src = this._displayToSource(e.clientX, e.clientY);
+        if (src) send('up', { screen: this.id, x: src.x, y: src.y, button: 1 });
+        dragging = false;
+      } else {
+        // Quick tap → check for double-tap (focus mode), else left click
+        const now = Date.now();
+        const dbl = (now - this._tapTime) < 280 &&
+                    Math.abs(e.clientX - this._tapX) < 30 &&
+                    Math.abs(e.clientY - this._tapY) < 30;
+        if (dbl) {
+          this._tapTime = 0;
+          if (this._crop) this._exitFocus();
+          else {
+            const src = this._displayToSource(e.clientX, e.clientY);
+            if (src && !this._crop) this._enterFocus(src.x, src.y);
+          }
+        } else {
+          this._tapTime = now;
+          this._tapX = e.clientX;
+          this._tapY = e.clientY;
+          const src = this._displayToSource(e.clientX, e.clientY);
+          if (src) {
+            send('click', { screen: this.id, x: src.x, y: src.y, button: 1 });
+            ripple(e.clientX, e.clientY);
+          }
+        }
+      }
+      downAt = null;
+    };
+
+    el.addEventListener('pointerup',     finish);
+    el.addEventListener('pointercancel', finish);
+  }
+
+  _setupPinch() {
+    const el = this.video;
+    el.addEventListener('touchstart', (e) => {
+      if (controlMode) return;
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        const d = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        // anchor zoom to the midpoint between the two fingers
+        const mx   = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        const my   = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        const rect = el.getBoundingClientRect();
+        const ox   = ((mx - rect.left) / rect.width)  * 100;
+        const oy   = ((my - rect.top)  / rect.height) * 100;
+        this._pinch = { startDist: d, startScale: this._scale, ox, oy };
+      }
+    }, { passive: false });
+
+    el.addEventListener('touchmove', (e) => {
+      if (controlMode) return;
+      if (e.touches.length === 2 && this._pinch) {
+        e.preventDefault();
+        const d = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        const s = Math.min(4, Math.max(1, this._pinch.startScale * (d / this._pinch.startDist)));
+        this._scale = s;
+        if (s === 1) {
+          el.style.transform       = '';
+          el.style.transformOrigin = '';
+        } else {
+          el.style.transformOrigin = `${this._pinch.ox}% ${this._pinch.oy}%`;
+          el.style.transform       = `scale(${s})`;
+        }
+      }
+    }, { passive: false });
+
+    el.addEventListener('touchend', () => { this._pinch = null; });
+  }
+
+  start() {
+    if (this.active) return;
+    this.active = true;
+    this.delay  = 1500;
+    this._connect();
+  }
+
+  stop() {
+    this.active = false;
+    clearTimeout(this.timer);
+    clearInterval(this._stalledTimer);
+    this._destroy();
+    this._badge('idle');
+    this._resetStats();
+    this._crop = null;
+    this.focusBadge.classList.remove('visible');
+  }
+
+  _wsUrl() {
+    const q    = QUALITY[currentQuality];
+    let   url  = `ws://${location.hostname}:8765/${this.id}?bitrate=${q.bitrate}&fps=${currentFps}`;
+    if (this._crop) {
+      const { x, y, w, h } = this._crop;
+      url += `&crop=${x},${y},${w},${h}`;
+    }
+    return url;
+  }
+
+  _connect() {
+    if (!this.active) return;
+    this._badge('connecting');
+    this._destroy();
+    this._prevDecoded = 0;
+    this._lastTime    = -1;
+
+    this.player = mpegts.createPlayer(
+      { type: 'mpegts', isLive: true, url: this._wsUrl() },
+      {
+        enableWorker: true,
+        enableStashBuffer: false,
+        lazyLoadMaxDuration: 0,
+        liveBufferLatencyChasing: true,
+        liveBufferLatencyMaxLatency: 0.5,
+        liveBufferLatencyMinRemain: 0.05,
+        stashInitialSize: 64,
+      }
+    );
+
+    this.player.attachMediaElement(this.video);
+    this.player.load();
+
+    this.player.on(mpegts.Events.STATISTICS_INFO, (info) => this._updateStats(info));
+
+    this.player.on(mpegts.Events.ERROR, (type, detail) => {
+      console.warn(`[${this.id}] error`, type, detail);
+      this._scheduleReconnect();
+    });
+
+    this.player.on(mpegts.Events.MEDIA_INFO, () => { this.delay = 1500; });
+
+    this.video.addEventListener('playing', () => {
+      this._badge('streaming');
+      this.tapOvl.classList.remove('visible');
+      this._startStalledCheck();
+      // Browser notification — first time stream goes live
+      if (!this._notified) {
+        this._notified = true;
+        if (Notification.permission === 'granted') {
+          new Notification('Screen Stream', {
+            body: `${this.id === 'laptop' ? 'Laptop' : 'External'} screen is live`,
+            silent: true,
+          });
+        }
+      }
+    });
+
+    this.video.addEventListener('waiting', () => {
+      if (this.active) this._badge('connecting');
+    });
+
+    this.video.addEventListener('error', () => {
+      if (this.active) this._scheduleReconnect();
+    });
+
+    this.player.play().catch(() => {
+      this._badge('tap-to-play');
+      this.tapOvl.classList.add('visible');
+    });
+  }
+
+  _startStalledCheck() {
+    clearInterval(this._stalledTimer);
+    this._lastTime = this.video.currentTime;
+    this._stalledTimer = setInterval(() => {
+      if (!this.active) return;
+      const t = this.video.currentTime;
+      if (t === this._lastTime && this.video.readyState >= 3) {
+        // currentTime hasn't advanced — stream stalled
+        this._badge('stalled');
+        this._scheduleReconnect();
+      } else {
+        this._lastTime = t;
+      }
+    }, 4000);
+  }
+
+  _updateStats(info) {
+    const speedKB = info.speed || 0;
+    const spdEl   = document.getElementById(`spd-${this.id}`);
+    spdEl.textContent = speedKB >= 1024
+      ? `↓ ${(speedKB/1024).toFixed(1)} MB/s`
+      : `↓ ${Math.round(speedKB)} KB/s`;
+    spdEl.classList.toggle('live', speedKB > 0);
+
+    const decoded = info.decodedFrames || 0;
+    const fps = Math.max(0, decoded - this._prevDecoded);
+    this._prevDecoded = decoded;
+    const fpsEl = document.getElementById(`fps-${this.id}`);
+    fpsEl.textContent = `${fps} fps`;
+    fpsEl.classList.toggle('live', fps > 0);
+
+    const dropped = info.droppedFrames || 0;
+    const drpEl = document.getElementById(`drp-${this.id}`);
+    drpEl.textContent = `${dropped} dropped`;
+    drpEl.classList.toggle('has-drops', dropped > 0);
+  }
+
+  _resetStats() {
+    document.getElementById(`spd-${this.id}`).textContent = '—';
+    document.getElementById(`fps-${this.id}`).textContent = '— fps';
+    document.getElementById(`drp-${this.id}`).textContent = '0 dropped';
+    this._prevDecoded = 0;
+  }
+
+  _scheduleReconnect() {
+    if (!this.active) return;
+    clearInterval(this._stalledTimer);
+    this._destroy();
+    this._badge('reconnecting');
+    this.timer = setTimeout(() => {
+      this.delay = Math.min(this.delay * 1.5, 8000);
+      this._connect();
+    }, this.delay);
+  }
+
+  _destroy() {
+    clearTimeout(this.timer);
+    clearInterval(this._stalledTimer);
+    if (!this.player) return;
+    try {
+      this.player.pause();
+      this.player.unload();
+      this.player.detachMediaElement();
+      this.player.destroy();
+    } catch(_) {}
+    this.player = null;
+  }
+
+  _badge(state) {
+    this.badge.textContent = state;
+    this.badge.className = `badge ${state.replace(/\s+/g, '-')}`;
+  }
+}
+
+// ─── RTT measurement ───────────────────────────────────────────────────────
+const rttPill = document.getElementById('rtt-pill');
+async function measureRTT() {
+  try {
+    const t0  = performance.now();
+    const res = await fetch(`http://${location.hostname}:8766/ping`, { cache: 'no-store' });
+    if (!res.ok) throw new Error();
+    const rtt = Math.round(performance.now() - t0);
+    rttPill.textContent = `RTT ${rtt} ms`;
+    rttPill.className   = rtt < 30 ? '' : rtt < 80 ? 'warn' : 'bad';
+  } catch(_) {
+    rttPill.textContent = 'RTT —';
+    rttPill.className   = 'idle';
+  }
+}
+setInterval(measureRTT, 2000);
+measureRTT();
+
+// ─── Cursor highlight ──────────────────────────────────────────────────────
+let cursorOn     = false;
+let _cursorTimer = null;
+let _cursorCap   = false;  // server has xdotool
+
+// Check server capability
+fetch(`http://${location.hostname}:8766/capabilities`)
+  .then(r => r.json())
+  .then(c => {
+    _cursorCap    = !!c.cursor;
+    _controlCap   = !!c.control;
+    _clipboardCap = !!c.clipboard;
+    const cb = document.getElementById('cursor-btn');
+    if (!_cursorCap) { cb.style.opacity = '.3'; cb.title = 'xdotool not installed'; }
+    const ctl = document.getElementById('control-btn');
+    if (!_controlCap)   { ctl.style.opacity = '.3'; ctl.title = 'xdotool not installed'; }
+    const clp = document.getElementById('clip-btn');
+    if (!_clipboardCap) { clp.style.opacity = '.3'; clp.title = 'xclip not installed'; }
+  })
+  .catch(() => {});
+
+function toggleCursor() {
+  if (!_cursorCap) { toast('Install xdotool on the laptop first'); return; }
+  cursorOn = !cursorOn;
+  document.getElementById('cursor-btn').classList.toggle('active-green', cursorOn);
+  if (cursorOn) {
+    _startCursorPoll();
+    toast('Cursor highlight ON');
+  } else {
+    clearInterval(_cursorTimer);
+    // clear both canvases
+    for (const id of ['laptop', 'external']) _clearCursor(id);
+    toast('Cursor highlight OFF');
+  }
+}
+
+function _clearCursor(id) {
+  const canvas = document.getElementById(`canvas-${id}`);
+  canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function _startCursorPoll() {
+  clearInterval(_cursorTimer);
+  _cursorTimer = setInterval(async () => {
+    if (!cursorOn) return;
+    try {
+      const r = await fetch(`http://${location.hostname}:8766/cursor`, { cache: 'no-store' });
+      if (!r.ok) return;
+      const { x, y, screen, sw, sh } = await r.json();
+      if (screen === null || x < 0) {
+        _clearCursor('laptop');
+        _clearCursor('external');
+        return;
+      }
+      _drawCursor(screen, x, y, sw, sh);
+      // Clear the other screen's canvas
+      _clearCursor(screen === 'laptop' ? 'external' : 'laptop');
+    } catch(_) {}
+  }, 50);
+}
+
+function _drawCursor(screenId, cx, cy, sw, sh) {
+  const wrap   = document.getElementById(`wrap-${screenId}`);
+  const canvas = document.getElementById(`canvas-${screenId}`);
+  const video  = document.getElementById(`vid-${screenId}`);
+
+  // Sync canvas size to wrap size
+  if (canvas.width !== wrap.clientWidth)  canvas.width  = wrap.clientWidth;
+  if (canvas.height !== wrap.clientHeight) canvas.height = wrap.clientHeight;
+
+  // Map from source resolution to displayed video rect (letterbox-aware)
+  const vr   = sw / sh;
+  const wr   = canvas.width / canvas.height;
+  let vw, vh, ox, oy;
+  if (vr > wr) {
+    vw = canvas.width;  vh = canvas.width / vr;
+    ox = 0; oy = (canvas.height - vh) / 2;
+  } else {
+    vh = canvas.height; vw = canvas.height * vr;
+    oy = 0; ox = (canvas.width - vw) / 2;
+  }
+
+  const px = ox + (cx / sw) * vw;
+  const py = oy + (cy / sh) * vh;
+
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.beginPath();
+  ctx.arc(px, py, 18, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255, 80, 80, 0.85)';
+  ctx.lineWidth   = 2.5;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(px, py, 5, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255, 80, 80, 0.5)';
+  ctx.fill();
+}
+
+// ─── Fullscreen ────────────────────────────────────────────────────────────
+const FS_EXPAND   = `<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>`;
+const FS_COLLAPSE = `<polyline points="4 14 4 20 10 20"/><polyline points="20 10 20 4 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/>`;
+
+function toggleFullscreen(id) {
+  if (!document.fullscreenElement) {
+    document.getElementById(`wrap-${id}`).requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen().catch(() => {});
+  }
+}
+document.addEventListener('fullscreenchange', () => {
+  const inFs = !!document.fullscreenElement;
+  for (const id of ['laptop', 'external']) {
+    document.getElementById(`fs-icon-${id}`).innerHTML = inFs ? FS_COLLAPSE : FS_EXPAND;
+  }
+});
+
+// ─── Draggable divider ─────────────────────────────────────────────────────
+const divider = document.getElementById('divider');
+let _divDragging = false;
+let _dividerDrag = false;   // flag for swipe conflict prevention
+
+function _onDividerMove(clientX, clientY) {
+  const streams  = document.getElementById('streams');
+  const portrait = window.matchMedia('(orientation: portrait)').matches;
+  const rect     = streams.getBoundingClientRect();
+  let pct;
+  if (portrait) {
+    pct = Math.min(85, Math.max(15, ((clientY - rect.top) / rect.height) * 100));
+    document.getElementById('wrap-laptop').style.flex   = `0 0 ${pct}%`;
+    document.getElementById('wrap-external').style.flex = `0 0 ${100 - pct}%`;
+  } else {
+    pct = Math.min(85, Math.max(15, ((clientX - rect.left) / rect.width) * 100));
+    document.getElementById('wrap-laptop').style.flex   = `0 0 ${pct}%`;
+    document.getElementById('wrap-external').style.flex = `0 0 ${100 - pct}%`;
+  }
+}
+
+divider.addEventListener('mousedown', (e) => {
+  _divDragging = true; _dividerDrag = true;
+  divider.classList.add('dragging');
+  e.preventDefault();
+});
+document.addEventListener('mousemove', (e) => {
+  if (_divDragging) _onDividerMove(e.clientX, e.clientY);
+});
+document.addEventListener('mouseup', () => {
+  _divDragging = false;
+  divider.classList.remove('dragging');
+  setTimeout(() => { _dividerDrag = false; }, 50);
+});
+
+divider.addEventListener('touchstart', (e) => {
+  _divDragging = true; _dividerDrag = true;
+  divider.classList.add('dragging');
+}, { passive: true });
+document.addEventListener('touchmove', (e) => {
+  if (_divDragging) _onDividerMove(e.touches[0].clientX, e.touches[0].clientY);
+}, { passive: true });
+document.addEventListener('touchend', () => {
+  _divDragging = false;
+  divider.classList.remove('dragging');
+  setTimeout(() => { _dividerDrag = false; }, 50);
+});
+
+// ─── View management ───────────────────────────────────────────────────────
+const streams = {
+  laptop:   new ScreenStream('laptop'),
+  external: new ScreenStream('external'),
+};
+
+function setView(view) {
+  document.querySelectorAll('[data-view]').forEach(b =>
+    b.classList.toggle('active', b.dataset.view === view)
+  );
+
+  const showLaptop   = view === 'laptop'   || view === 'both';
+  const showExternal = view === 'external' || view === 'both';
+
+  document.getElementById('wrap-laptop').classList.toggle('hidden', !showLaptop);
+  document.getElementById('wrap-external').classList.toggle('hidden', !showExternal);
+  divider.style.display = view === 'both' ? 'block' : 'none';
+
+  // Reset split to 50/50 when entering Both
+  if (view === 'both') {
+    document.getElementById('wrap-laptop').style.flex   = '';
+    document.getElementById('wrap-external').style.flex = '';
+  }
+
+  showLaptop   ? streams.laptop.start()   : streams.laptop.stop();
+  showExternal ? streams.external.start() : streams.external.stop();
+
+  try { localStorage.setItem('ss-view', view); } catch(_) {}
+}
+
+// ─── Swipe to switch screens ───────────────────────────────────────────────
+const ORDER        = ['laptop', 'external'];
+const SWIPE_MIN    = 50;
+const SWIPE_MAX_VT = 80;
+let _tx = 0, _ty = 0;
+
+document.addEventListener('touchstart', (e) => {
+  _tx = e.touches[0].clientX;
+  _ty = e.touches[0].clientY;
+}, { passive: true });
+
+document.addEventListener('touchend', (e) => {
+  if (_dividerDrag || controlMode) return;
+  const dx = e.changedTouches[0].clientX - _tx;
+  const dy = e.changedTouches[0].clientY - _ty;
+  if (Math.abs(dy) > SWIPE_MAX_VT || Math.abs(dx) < SWIPE_MIN) return;
+
+  const current = document.querySelector('[data-view].active')?.dataset?.view;
+  if (!current || current === 'both') return;
+
+  const idx  = ORDER.indexOf(current);
+  const next = dx < 0 ? ORDER[idx + 1] : ORDER[idx - 1];
+  if (!next) return;
+
+  if (document.fullscreenElement) {
+    document.exitFullscreen().then(() => setView(next)).catch(() => setView(next));
+  } else {
+    setView(next);
+  }
+}, { passive: true });
+
+// ─── Wake / sleep detection ────────────────────────────────────────────────
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    // Tablet screen off — stop all streams to save resources
+    Object.values(streams).forEach(s => {
+      if (s.active) {
+        s._destroy();
+        s._badge('connecting');
+      }
+    });
+  } else {
+    // Screen back on — reconnect active streams immediately
+    Object.values(streams).forEach(s => {
+      if (s.active) { s.delay = 500; s._connect(); }
+    });
+  }
+});
+
+// ─── Keyboard shortcuts ────────────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  switch (e.key.toLowerCase()) {
+    case '1':          setView('laptop');   toast('Laptop');   break;
+    case '2':          setView('external'); toast('External'); break;
+    case 'b':          setView('both');     toast('Both');     break;
+    case 'f':          toggleFullscreen(
+                         document.querySelector('[data-view].active')?.dataset?.view || 'laptop'
+                       ); break;
+    case 'escape':     if (document.fullscreenElement) document.exitFullscreen(); break;
+    case 'arrowleft':  setView('laptop');   toast('← Laptop');   break;
+    case 'arrowright': setView('external'); toast('External →'); break;
+    case 'l':          setQuality('low');  break;
+    case 'm':          setQuality('med');  break;
+    case 'h':          setQuality('high'); break;
+    case 'c':          toggleCursor();     break;
+    case 'r':          toggleControl();    break;
+    case 'k':          toggleKeyboard();   break;
+    case 'arrowup':    { const steps = [10,15,24,30]; const i = steps.indexOf(currentFps); if (i < steps.length-1) setFps(steps[i+1]); break; }
+    case 'arrowdown':  { const steps = [10,15,24,30]; const i = steps.indexOf(currentFps); if (i > 0) setFps(steps[i-1]); break; }
+  }
+});
+
+// ─── Browser notification permission ──────────────────────────────────────
+if ('Notification' in window && Notification.permission === 'default') {
+  // Ask once, quietly — after a small delay so it doesn't pop on page load
+  setTimeout(() => Notification.requestPermission(), 3000);
+}
+
+// ─── Init ──────────────────────────────────────────────────────────────────
+if (!mpegts.isSupported()) {
+  document.getElementById('mse-error').style.display = 'flex';
+} else {
+  const savedView    = (() => { try { return localStorage.getItem('ss-view');    } catch(_){} })();
+  const savedQuality = (() => { try { return localStorage.getItem('ss-quality'); } catch(_){} })();
+  const savedFps     = (() => { try { return localStorage.getItem('ss-fps');     } catch(_){} })();
+
+  if (savedQuality && QUALITY[savedQuality]) {
+    currentQuality = savedQuality;
+    document.querySelectorAll('[data-q]').forEach(b =>
+      b.classList.toggle('active', b.dataset.q === savedQuality)
+    );
+  }
+  if (savedFps) {
+    const fps = parseInt(savedFps);
+    if ([10, 15, 24, 30].includes(fps)) {
+      currentFps = fps;
+      document.querySelectorAll('[data-fps]').forEach(b =>
+        b.classList.toggle('active', parseInt(b.dataset.fps) === fps)
+      );
+    }
+  }
+  setView(savedView || 'laptop');
+  _initKeyboard();
+}
+</script>
+</body>
+</html>

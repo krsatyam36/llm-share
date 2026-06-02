@@ -1,0 +1,4 @@
+#!/bin/bash
+# Runs before package files are removed. Stop any running instance.
+pkill -f "/opt/screen-share-tab/server.py" 2>/dev/null || true
+exit 0

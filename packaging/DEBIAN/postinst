@@ -1,0 +1,28 @@
+#!/bin/bash
+# Runs as root after package files are placed on disk.
+set -e
+
+INSTALL_DIR="/opt/screen-share-tab"
+VENV="$INSTALL_DIR/.venv"
+MPEGTS_URL="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.min.js"
+
+echo "Setting up screen-share-tab..."
+
+# ── Python venv + packages ────────────────────────────────────────────────────
+python3 -m venv "$VENV"
+"$VENV/bin/pip" install --quiet --upgrade pip
+"$VENV/bin/pip" install --quiet websockets qrcode zeroconf
+
+# ── mpegts.js (served locally to tablet — no internet needed at runtime) ──────
+if [ ! -f "$INSTALL_DIR/mpegts.min.js" ]; then
+    echo "  Downloading mpegts.js..."
+    curl -sL "$MPEGTS_URL" -o "$INSTALL_DIR/mpegts.min.js" || \
+        echo "  Warning: could not download mpegts.js (needs internet). Will retry on first run."
+fi
+
+# ── Permissions — readable and executable by all users ───────────────────────
+chmod -R a+rX "$INSTALL_DIR"
+chmod +x "$INSTALL_DIR/start.sh"
+chmod +x "$INSTALL_DIR/install-service.sh"
+
+echo "Done. Run 'screen-share-tab' in any terminal."

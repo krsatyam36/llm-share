@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+build/
+dist/
+*.egg-info/
+
+# System / IDE
+.DS_Store
+.vscode/
+.idea/
+.claude/
+
+# Project specific
+mpegts.min.js
+screen-share-tab_1.0.0_amd64.deb

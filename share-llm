@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# ==============================================================================
+# share-llm: Entry point for LLM-Share
+# Prompts for local Ollama model and bootstraps the streaming environment
+# ==============================================================================
+
+echo -e "\n🧠 Initializing LLM-Share Environment...\n"
+
+# 1. Verify Ollama is accessible
+if ! command -v ollama &> /dev/null; then
+    echo "❌ Error: Ollama is not installed or not in PATH."
+    echo "Please install it or start the service to continue."
+    exit 1
+fi
+
+# 2. Prompt for the Multimodal Model
+echo "Available models (from ollama list):"
+ollama list | awk 'NR>1 {print "  - " $1}'
+echo ""
+
+read -p "Select multimodal LLM to use [Default: gemma3:4b]: " USER_MODEL
+
+# Export to environment for server.py to pick up
+export LLM_MODEL=${USER_MODEL:-"gemma3:4b"}
+
+echo -e "\n🚀 Booting stream and binding to model: $LLM_MODEL...\n"
+
+# 3. Forward execution to start.sh
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+bash "$DIR/start.sh"
