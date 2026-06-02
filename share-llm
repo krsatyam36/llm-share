@@ -28,4 +28,4 @@ echo -e "\n🚀 Booting stream and binding to model: $LLM_MODEL...\n"
 
 # 3. Forward execution to start.sh
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-bash "$DIR/start.sh"
+python3 "$DIR/server.py"
