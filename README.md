@@ -13,7 +13,7 @@ Select an Ollama model, then stream your laptop and external monitors directly t
 
 ## Features
 
-- **LLM Integration:** Select any Ollama model at startup via `share-llm`. Model choice is passed as `LLM_MODEL` environment variable for downstream tooling.
+- **LLM Integration:** Select any Ollama model at startup via `share-llm`. The server automatically captures desktop screenshots every 4s and sends them to the selected Ollama model for real-time analysis — results stream directly to the client UI.
 - **Low Latency:** Optimized pipeline using `ffmpeg` and `mpegts.js` for sub-500ms latency.
 - **Interactive Remote Control:** Use your tablet's touch screen to move the mouse, click, scroll, and type on your laptop.
 - **Clipboard Sync:** Effortlessly share text between your tablet and laptop.
@@ -22,6 +22,7 @@ Select an Ollama model, then stream your laptop and external monitors directly t
 - **Zero Configuration:** mDNS/Zeroconf support (`http://screen-stream.local:8766`) and terminal QR codes for instant access.
 - **Smart Zoom & Pan:** Pinch-to-zoom and swipe gestures optimized for mobile browsers.
 - **Cursor Highlighting:** Real-time visual feedback of your laptop's cursor position on the tablet.
+- **Split-Screen UI:** Client layout features a resizable video panel alongside an AI response panel that displays live Ollama analysis.
 
 ---
 
@@ -57,17 +58,19 @@ Open the URL printed in your terminal on your tablet's browser. If `qrcode` is i
 ## How It Works
 
 ```mermaid
-graph LR
-    A[share-llm] --> B[select Ollama model]
-    B --> C[start.sh]
-    C --> D[server.py]
-    D --> E[ffmpeg x11grab]
-    E --> F[H.264 MPEG-TS]
-    F --> G[WebSocket Server]
-    G --> H[Tablet Browser]
-    H -- Remote Input --> I[HTTP API]
-    I --> J[xdotool/xclip]
-    J --> E
+graph TB
+    A[share-llm] -->|select Ollama model| B[server.py]
+    B --> C[ffmpeg x11grab]
+    C --> D[H.264 MPEG-TS]
+    D --> E[WebSocket :8765]
+    E --> F[Tablet Browser]
+    F -- Remote Input --> G[HTTP API :8766]
+    G --> H[xdotool/xclip]
+    H --> C
+
+    B --> I[AI Analysis Loop]
+    I -->|capture screenshot every 4s| J[Ollama API]
+    J -->|stream tokens| E
 ```
 
 ---
@@ -76,11 +79,11 @@ graph LR
 
 | File | Purpose |
 |---|---|
-| `share-llm` | Entry point — prompts for an Ollama model, exports `LLM_MODEL`, then launches the stream |
-| `start.sh` | Dependency checker and launcher for the server |
-| `server.py` | HTTP + WebSocket server that streams screens and handles remote input |
-| `index.html` | Client-side web UI with mpegts.js player, touch controls, and keyboard shortcuts |
-| `install-service.sh` | Install the server as a systemd service for persistent background operation |
+| `share-llm` | Entry point — prompts for an Ollama model, exports `LLM_MODEL`, then launches `server.py` directly |
+| `start.sh` | Standalone dependency checker and launcher (used by systemd service & .deb package) |
+| `server.py` | Async HTTP + WebSocket server — handles video streaming, remote input, and AI screenshot analysis loop |
+| `index.html` | Client-side split-screen web UI with mpegts.js player, touch controls, and live AI response panel |
+| `install-service.sh` | Install the server as a systemd user service for persistent background operation |
 | `packaging/` | Debian packaging scripts (`build-deb.sh` + DEBIAN control files) |
 
 ---
