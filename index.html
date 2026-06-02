@@ -16,181 +16,110 @@
             height: 100vh;
             overflow: hidden;
         }
-        @media(min-width: 768px) {
-            body { flex-direction: row; }
-        }
-        #video-container {
-            flex: 1;
-            background: #000;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            position: relative;
-            min-height: 20vh; /* Don't let video disappear completely */
-        }
-        video {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-        }
+        @media(min-width: 768px) { body { flex-direction: row; } }
         
-        /* Drag Handle UI */
+        #video-container {
+            flex: 1; background: #000; display: flex; align-items: center; justify-content: center; min-height: 20vh;
+        }
+        video { width: 100%; height: 100%; object-fit: contain; }
+        
         #resizer {
-            height: 24px;
-            background: #1e1e1e;
-            cursor: ns-resize;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            touch-action: none; /* Prevents mobile pull-to-refresh while dragging */
-            border-top: 1px solid #333;
-            z-index: 10;
+            height: 24px; background: #1e1e1e; cursor: ns-resize; display: flex; justify-content: center; align-items: center; touch-action: none; border-top: 1px solid #333; z-index: 10;
         }
-        #resizer::after {
-            content: "";
-            width: 40px;
-            height: 4px;
-            background: #555;
-            border-radius: 2px;
-        }
+        #resizer::after { content: ""; width: 40px; height: 4px; background: #555; border-radius: 2px; }
 
         #ai-container {
-            width: 100%;
-            height: 35vh; /* Default starting height */
-            background: #1e1e1e;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
+            width: 100%; height: 35vh; background: #1e1e1e; display: flex; flex-direction: column; overflow: hidden;
         }
         @media(min-width: 768px) {
-            #ai-container {
-                width: 400px;
-                height: 100%;
-                border-left: 2px solid #333;
-            }
-            #resizer {
-                width: 10px;
-                height: 100%;
-                cursor: ew-resize;
-                border-top: none;
-            }
-            #resizer::after {
-                width: 4px;
-                height: 40px;
-            }
+            #ai-container { width: 400px; height: 100%; border-left: 2px solid #333; }
+            #resizer { width: 10px; height: 100%; cursor: ew-resize; border-top: none; }
+            #resizer::after { width: 4px; height: 40px; }
         }
+        
         #ai-header {
-            padding: 12px;
-            background: #252526;
-            font-weight: bold;
-            border-bottom: 1px solid #333;
-            font-size: 14px;
-            letter-spacing: 0.5px;
-            text-transform: uppercase;
-            color: #00bcd4;
+            padding: 12px; background: #252526; font-weight: bold; border-bottom: 1px solid #333; font-size: 14px; color: #00bcd4;
+            display: flex; justify-content: space-between; align-items: center;
         }
+        
+        /* The New Send Button */
+        #sendBtn {
+            background: #00bcd4; color: #000; border: none; padding: 6px 14px; border-radius: 4px; font-weight: bold; font-size: 12px; text-transform: uppercase; cursor: pointer; transition: background 0.2s;
+        }
+        #sendBtn:active { background: #008ba3; }
+        #sendBtn:disabled { background: #444; color: #888; cursor: not-allowed; }
+
         #ai-content {
-            flex: 1;
-            padding: 16px;
-            overflow-y: auto;
-            font-size: 15px;
-            line-height: 1.6;
-            word-wrap: break-word;
-            white-space: pre-wrap;
+            flex: 1; padding: 16px; overflow-y: auto; font-size: 15px; line-height: 1.6; word-wrap: break-word; white-space: pre-wrap;
         }
-        .status-dot {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            background: #4caf50;
-            border-radius: 50%;
-            margin-right: 6px;
-        }
+        .status-dot { display: inline-block; width: 8px; height: 8px; background: #4caf50; border-radius: 50%; margin-right: 6px; }
         .thinking { color: #888; font-style: italic; }
     </style>
 </head>
 <body>
-
-    <div id="video-container">
-        <video id="videoElement" autoplay muted playsinline></video>
-    </div>
-
+    <div id="video-container"><video id="videoElement" autoplay muted playsinline></video></div>
     <div id="resizer"></div>
-
     <div id="ai-container">
         <div id="ai-header">
-            <span class="status-dot"></span> Gemma3 Live Analysis
+            <div><span class="status-dot"></span> Gemma3 Live Analysis</div>
+            <button id="sendBtn">Send</button>
         </div>
         <div id="ai-content">
-            <p class="thinking">Waiting for stream frames...</p>
+            <p class="thinking">Awaiting evaluation trigger...</p>
         </div>
     </div>
 
     <script>
-        // --- UI Resizer Logic ---
         const resizer = document.getElementById('resizer');
         const aiContainer = document.getElementById('ai-container');
         let isResizing = false;
-
         resizer.addEventListener('mousedown', () => isResizing = true);
         resizer.addEventListener('touchstart', () => isResizing = true);
-
-        window.addEventListener('mousemove', (e) => handleResize(e.clientY));
-        window.addEventListener('touchmove', (e) => handleResize(e.touches[0].clientY));
-
+        window.addEventListener('mousemove', (e) => { if(isResizing && window.innerHeight - e.clientY > window.innerHeight*0.1) aiContainer.style.height = `${window.innerHeight - e.clientY}px`; });
+        window.addEventListener('touchmove', (e) => { if(isResizing && window.innerHeight - e.touches[0].clientY > window.innerHeight*0.1) aiContainer.style.height = `${window.innerHeight - e.touches[0].clientY}px`; });
         window.addEventListener('mouseup', () => isResizing = false);
         window.addEventListener('touchend', () => isResizing = false);
 
-        function handleResize(clientY) {
-            if (!isResizing) return;
-            // Calculate new height for the bottom AI container
-            const totalHeight = window.innerHeight;
-            const newHeight = totalHeight - clientY;
-            
-            // Prevent dragging it entirely off screen (keep between 10% and 85% of screen)
-            if (newHeight > totalHeight * 0.1 && newHeight < totalHeight * 0.85) {
-                aiContainer.style.height = `${newHeight}px`;
-            }
-        }
-
-        // --- Stream Logic ---
         const wsUrl = `ws://${window.location.hostname}:8765`;
         const videoElement = document.getElementById('videoElement');
         const aiContent = document.getElementById('ai-content');
+        const sendBtn = document.getElementById('sendBtn');
         
         let player = null;
         let ws = new WebSocket(wsUrl);
         
         if (mpegts.getFeatureList().mseLivePlayback) {
-            player = mpegts.createPlayer({
-                type: 'mse',
-                isLive: true,
-                url: wsUrl
-            });
+            player = mpegts.createPlayer({ type: 'mse', isLive: true, url: wsUrl });
             player.attachMediaElement(videoElement);
         }
+
+        // Handle the Send Button Click
+        sendBtn.addEventListener('click', () => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "trigger_eval" }));
+                sendBtn.disabled = true;
+                sendBtn.innerText = "Evaluating...";
+            }
+        });
 
         ws.onmessage = async function(event) {
             if (typeof event.data === "string") {
                 try {
                     const msg = JSON.parse(event.data);
                     if (msg.type === "ai_stream_start") {
-                        aiContent.innerHTML = '<p class="thinking">Analyzing screen...</p>';
+                        aiContent.innerHTML = '<p class="thinking">Analyzing screen frame...</p>';
                     } else if (msg.type === "ai_token") {
-                        if (aiContent.querySelector('.thinking')) {
-                            aiContent.innerHTML = '';
-                        }
-                        
-                        // Sanitize input: Remove bold asterisks and escape HTML tags
+                        if (aiContent.querySelector('.thinking')) aiContent.innerHTML = '';
                         let safeText = msg.text.replace(/\*\*/g, '');
                         safeText = safeText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                        
                         aiContent.innerHTML += safeText;
                         aiContent.scrollTop = aiContent.scrollHeight;
+                    } else if (msg.type === "ai_stream_end") {
+                        // Re-enable button when Gemma3 finishes
+                        sendBtn.disabled = false;
+                        sendBtn.innerText = "Send";
                     }
                 } catch(e) { }
-            } else if (event.data instanceof Blob && player) {
-                // Video binary handled automatically by mpegts via WebSocket URL bind
             }
         };
 
