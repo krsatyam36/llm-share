@@ -13,7 +13,7 @@ Select an Ollama model, then stream your laptop and external monitors directly t
 
 ## Features
 
-- **LLM Integration:** Select any Ollama model at startup via `share-llm`. The server automatically captures desktop screenshots every 4s and sends them to the selected Ollama model for real-time analysis — results stream directly to the client UI.
+- **LLM Integration:** Select any Ollama model at startup via `share-llm`. Tap the **Send** button on your tablet to capture a screenshot and trigger on-demand analysis by the selected Ollama model — results stream directly to the client UI.
 - **Low Latency:** Optimized pipeline using `ffmpeg` and `mpegts.js` for sub-500ms latency.
 - **Interactive Remote Control:** Use your tablet's touch screen to move the mouse, click, scroll, and type on your laptop.
 - **Clipboard Sync:** Effortlessly share text between your tablet and laptop.
@@ -68,8 +68,9 @@ graph TB
     G --> H[xdotool/xclip]
     H --> C
 
-    B --> I[AI Analysis Loop]
-    I -->|capture screenshot every 4s| J[Ollama API]
+    F -- Send Click --> E
+    E --> I[AI Analysis on-demand]
+    I -->|capture screenshot| J[Ollama API]
     J -->|stream tokens| E
 ```
 
@@ -81,8 +82,8 @@ graph TB
 |---|---|
 | `share-llm` | Entry point — prompts for an Ollama model, exports `LLM_MODEL`, then launches `server.py` directly |
 | `start.sh` | Standalone dependency checker and launcher (used by systemd service & .deb package) |
-| `server.py` | Async HTTP + WebSocket server — handles video streaming, remote input, and AI screenshot analysis loop |
-| `index.html` | Client-side split-screen web UI with mpegts.js player, touch controls, and live AI response panel |
+| `server.py` | Async HTTP + WebSocket server — handles video streaming, remote input, and event-driven AI screenshot analysis |
+| `index.html` | Client-side split-screen web UI with mpegts.js player, touch controls, Send button for AI trigger, and live AI response panel |
 | `install-service.sh` | Install the server as a systemd user service for persistent background operation |
 | `packaging/` | Debian packaging scripts (`build-deb.sh` + DEBIAN control files) |
 
