@@ -1,31 +1,53 @@
 #!/bin/bash
 
-# ==============================================================================
-# share-llm: Entry point for LLM-Share
-# Prompts for local Ollama model and bootstraps the streaming environment
-# ==============================================================================
+echo "Initializing LLM-Share Environment..."
+echo ""
 
-echo -e "\n🧠 Initializing LLM-Share Environment...\n"
+# 1. Fetch available models from ollama and store them in an array
+mapfile -t models < <(ollama list | awk 'NR>1 {print $1}')
 
-# 1. Verify Ollama is accessible
-if ! command -v ollama &> /dev/null; then
-    echo "❌ Error: Ollama is not installed or not in PATH."
-    echo "Please install it or start the service to continue."
+if [ ${#models[@]} -eq 0 ]; then
+    echo "No Ollama models found! Please run 'ollama pull <model>' first."
     exit 1
 fi
 
-# 2. Prompt for the Multimodal Model
-echo "Available models (from ollama list):"
-ollama list | awk 'NR>1 {print "  - " $1}'
+echo "Available models:"
+# 2. Print models with serial numbers
+for i in "${!models[@]}"; do
+    printf "  [%2d] %s\n" "$((i+1))" "${models[$i]}"
+done
 echo ""
 
-read -p "Select multimodal LLM to use [Default: gemma3:4b]: " USER_MODEL
+# Set default selection index to gemma3:4b if available, otherwise default to item 1
+default_idx=1
+for i in "${!models[@]}"; do
+    if [[ "${models[$i]}" == "gemma3:4b" ]]; then
+        default_idx=$((i+1))
+        break
+    fi
+done
 
-# Export to environment for server.py to pick up
-export LLM_MODEL=${USER_MODEL:-"gemma3:4b"}
+# 3. Prompt user for the serial number
+read -p "Select multimodal LLM to use [Default Number: $default_idx]: " choice
 
-echo -e "\n🚀 Booting stream and binding to model: $LLM_MODEL...\n"
+# If user hits Enter, use the calculated default index
+if [ -z "$choice" ]; then
+    choice=$default_idx
+fi
 
-# 3. Forward execution to start.sh
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-python3 "$DIR/server.py"
+# 4. Validation check on user input
+if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#models[@]}" ]; then
+    echo "Invalid selection. Falling back to default."
+    SELECTED_MODEL="${models[$((default_idx-1))]}"
+else
+    SELECTED_MODEL="${models[$((choice-1))]}"
+fi
+
+echo ""
+echo "Booting stream and binding to model: $SELECTED_MODEL..."
+echo ""
+
+# 5. Export choice and run the python service
+export LLM_MODEL="$SELECTED_MODEL"
+source llm-share/bin/activate
+python3 server.py
